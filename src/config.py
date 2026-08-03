@@ -40,10 +40,15 @@ def resolve_chromium_path(
 
     candidates.append(root / ".runtime" / "chromium" / "chrome-win64" / "chrome.exe")
 
-    for playwright_root in (
+    playwright_roots = [
         Path.home() / ".cache" / "ms-playwright",
         Path.home() / ".cache" / "ms-playwright-go",
-    ):
+    ]
+    configured_playwright_root = _path_from_text(env.get("PLAYWRIGHT_BROWSERS_PATH"))
+    if configured_playwright_root:
+        playwright_roots.insert(0, configured_playwright_root)
+
+    for playwright_root in playwright_roots:
         try:
             candidates.extend(sorted(
                 playwright_root.glob("chromium-*/chrome-linux/chrome"),
