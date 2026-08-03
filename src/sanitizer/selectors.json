@@ -1,0 +1,104 @@
+{
+  "_comment": "Google 页面选择器配置 — 与代码逻辑解耦，Google 改版时只需更新此文件",
+  "_version": "2026-07",
+
+  "login": {
+    "email_input":       "input[type='email'], input[name='identifier'], #identifierId",
+    "email_next_btn":    "#identifierNext button, button:has-text('Next'), button:has-text('下一步')",
+    "password_input":    "input[name='Passwd']:not([aria-hidden='true']), input[type='password']:not([aria-hidden='true']):not([name='hiddenPassword']), input[name='password']:not([aria-hidden='true'])",
+    "password_next_btn": "#passwordNext button, button:has-text('Next'), button:has-text('下一步')",
+    "totp_input":        "input[type='tel'], input[id='totpPin']",
+    "totp_next_btn":     "#totpNext button, button:has-text('Next'), button:has-text('下一步')",
+    "backup_code_link":  "a:has-text('Try another way'), a:has-text('其他方式')",
+    "error_msg":         "#view_container .o6cuMc, div[jsname='B34EJ']"
+  },
+
+  "recovery_email": {
+    "page_url":          "https://myaccount.google.com/recovery/email",
+    "current_email":     "[data-email], .recovery-email-display",
+    "edit_btn":          "button:has-text('Edit'), button[aria-label*='Edit recovery email']",
+    "new_email_input":   "input[type='email'], input[name='recovery_email']",
+    "next_btn":          "button:has-text('Next'), button:has-text('下一步')",
+    "code_input":        "input[type='tel'], input[name='code'], input[aria-label*='verification']",
+    "verify_btn":        "button:has-text('Verify'), button:has-text('验证')",
+    "save_btn":          "button:has-text('Save'), button:has-text('保存')",
+    "success_indicator": "div:has-text('Your recovery email was updated')"
+  },
+
+  "recovery_phone": {
+    "page_url":          "https://myaccount.google.com/recovery/phone",
+    "phone_display":     "[data-phone], .recovery-phone-display",
+    "edit_btn":          "button:has-text('Edit'), button[aria-label*='Edit recovery phone']",
+    "remove_btn":        "button:has-text('Remove'), button:has-text('删除'), button[aria-label*='Remove']",
+    "confirm_remove_btn":"button:has-text('Remove'), button:has-text('确认删除')",
+    "success_indicator": "div:has-text('Your recovery phone was removed')"
+  },
+
+  "passkeys": {
+    "page_url":          "https://myaccount.google.com/signinoptions/passkeys",
+    "passkey_list":      "[jsname='passkey-row'], li[data-passkey-id], .passkey-list-item",
+    "delete_btn":        "button[aria-label*='Delete'], button[aria-label*='删除'], button:has-text('Delete')",
+    "confirm_delete_btn":"button:has-text('Delete'), button:has-text('确认'), [role='dialog'] button:last-child",
+    "empty_indicator":   "div:has-text('No passkeys'), div:has-text('没有通行密钥')"
+  },
+
+  "two_fa": {
+    "page_url":          "https://myaccount.google.com/signinoptions/two-step-verification/app",
+    "authenticator_url": "https://myaccount.google.com/two-step-verification/authenticator",
+    "start_btn":         "button:has-text('Get started'), button:has-text('Turn on 2-Step Verification'), button:has-text('开始使用'), button:has-text('启用两步验证')",
+    "change_btn":        "button:has-text('Change authenticator app'), button:has-text('Set up authenticator app'), button:has-text('Add authenticator app'), button:has-text('更改验证器应用'), button:has-text('设置验证器应用'), button:has-text('添加验证器应用')",
+    "qr_code":           "canvas[aria-label], img[alt*='QR'], .qrcode-container img",
+    "secret_key_text":   ".secret-key, [jsname='B6Lgyf'], span:has-text('Base32')",
+    "cant_scan_link":    "a:has-text(\"Can't scan\"), button:has-text(\"Can't scan\"), a:has-text('无法扫描'), button:has-text('无法扫描')",
+    "secret_input":      "input[jsname='YPqjbf'], input[aria-label*='key']",
+    "totp_verify_input": "input[type='tel'], input[id='totpPin'], input[aria-label*='code']",
+    "next_btn":          "button:has-text('Next'), button:has-text('下一步')",
+    "verify_btn":        "button:has-text('Verify'), button:has-text('验证')",
+    "success_indicator": "div:has-text('Authenticator app added'), div:has-text('已添加验证器')"
+  },
+
+  "backup_codes": {
+    "page_url":          "https://myaccount.google.com/signinoptions/two-step-verification/backup-codes",
+    "refresh_btn":       "button:has-text('Refresh codes'), button:has-text('刷新'), [aria-label*='Refresh']",
+    "confirm_refresh_btn":"button:has-text('Refresh'), [role='dialog'] button:has-text('Refresh')",
+    "code_list":         ".backup-code-cell, li.backup-code, [jsname='backup-code']",
+    "download_btn":      "a:has-text('Download'), button:has-text('下载')"
+  },
+
+  "password": {
+    "page_url":          "https://myaccount.google.com/signinoptions/password",
+    "current_pass_input":"input[name='password'], input[type='password']:first-of-type",
+    "new_pass_input":    "input[name='newPassword'], input[type='password']:nth-of-type(2)",
+    "confirm_pass_input":"input[name='confirmNewPassword'], input[type='password']:nth-of-type(3)",
+    "next_btn":          "button:has-text('Next'), button:has-text('下一步')",
+    "save_btn":          "button:has-text('Change password'), button:has-text('更改密码'), button[jsaction*='save']",
+    "success_indicator": "div:has-text('Password changed'), div:has-text('密码已更改')"
+  },
+
+  "device_activity": {
+    "page_url":          "https://myaccount.google.com/device-activity",
+    "sign_out_all_btn":  "button:has-text('Sign out all'), a:has-text('Sign out all'), [jsaction*='signOutAll']",
+    "confirm_btn":       "button:has-text('Sign out'), [role='dialog'] button:last-child"
+  },
+
+  "permissions": {
+    "page_url":          "https://myaccount.google.com/permissions",
+    "app_list":          ".app-list-item, [jsname='app-item'], li[data-appid]",
+    "app_item_link":     "a[href*='permissions'], button:has-text('View details')",
+    "revoke_btn":        "button:has-text('Remove Access'), button:has-text('撤销'), button[aria-label*='Remove']",
+    "confirm_revoke_btn":"button:has-text('OK'), button:has-text('确定'), [role='dialog'] button:last-child"
+  },
+
+  "app_passwords": {
+    "page_url":          "https://myaccount.google.com/apppasswords",
+    "password_list":     ".app-password-item, [jsname='app-password-row']",
+    "delete_btn":        "button[aria-label*='Revoke'], button:has-text('Revoke'), .delete-app-pass"
+  },
+
+  "security_challenges": {
+    "unusual_activity":  "div:has-text('Unusual activity'), div[jsname='UHEVhd']",
+    "verify_its_you":    "div:has-text(\"Verify it's you\"), div:has-text('验证身份')",
+    "recaptcha_frame":   "iframe[src*='recaptcha'], iframe[title*='reCAPTCHA']",
+    "try_another_way":   "a:has-text('Try another way'), button:has-text('其他方式')"
+  }
+}
