@@ -1,0 +1,10 @@
+.git
+.env
+.runtime
+.pytest_cache
+__pycache__
+*.pyc
+data
+logs
+tests
+visual-dashboard/preview*.png
