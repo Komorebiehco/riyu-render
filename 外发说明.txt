@@ -1,0 +1,13 @@
+RIYU 外发版使用说明
+
+1. 解压后先复制“.env.example”为“.env”，再按实际环境填写配置。
+2. 首次使用请联网双击“setup.cmd”，它会在本项目内创建“.runtime”并安装 Python 及依赖。
+3. 安装完成后双击“start.cmd”，或按 README.md 中的命令运行。
+4. 电脑需要已安装 Google Chrome 或 Microsoft Edge。
+
+安全说明：
+- 本外发包不包含原机器的 .env、数据库、账号导出、日志、缓存和本地运行环境。
+- 请勿把自己的 .env、data、logs 或任何账号凭证再次转发给他人。
+- ENCRYPTION_KEY 等敏感配置应由接收方自行生成和保管。
+
+验证结果：2026-08-03 执行测试，51 项全部通过。
