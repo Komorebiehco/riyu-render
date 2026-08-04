@@ -1163,17 +1163,24 @@ async function testProxySettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proxy_url: mode === 'custom' ? customProxy : undefined,
-        timeout: 5
+        timeout: 8,
+        sample_count: mode === 'file' ? 8 : undefined
       })
     });
 
     if (res.ok) {
       res.className = 'test-result-box success';
       resBox.className = 'test-result-box success';
-      resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> <span>协议: ${escapeHtml(res.scheme)}</span> <span>节点: ${escapeHtml(res.host)}:${res.port}</span>`;
+      const sampleInfo = res.mode === 'file'
+        ? `<span>抽样 ${res.sampled} 个 · 可用 ${res.succeeded} 个</span>`
+        : `<span>协议: ${escapeHtml(res.scheme)}</span>`;
+      resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> ${sampleInfo}`;
     } else {
       resBox.className = 'test-result-box error';
-      resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>`;
+      const sampleInfo = res.sampled
+        ? `<span>抽样 ${res.sampled} 个 · 可用 ${res.succeeded || 0} 个</span>`
+        : '';
+      resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>${sampleInfo}`;
     }
   } catch (err) {
     resBox.className = 'test-result-box error';

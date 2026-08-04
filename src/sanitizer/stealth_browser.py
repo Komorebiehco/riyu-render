@@ -143,6 +143,25 @@ class ProxyPool:
             log.warning(f"解析代理地址失败 ({proxy_url}): {e}")
             return None
 
+    def sample_proxies(self, count: int = 8) -> list[dict]:
+        """Return evenly distributed, parsed proxies without exposing raw values."""
+        if not self._proxies or count <= 0:
+            return []
+        sample_count = min(count, len(self._proxies))
+        if sample_count == 1:
+            indexes = [self._index % len(self._proxies)]
+        else:
+            last = len(self._proxies) - 1
+            indexes = [round(position * last / (sample_count - 1)) for position in range(sample_count)]
+        self._index = (self._index + sample_count) % len(self._proxies)
+        parsed: list[dict] = []
+        for index in indexes:
+            try:
+                parsed.append(_parse_proxy_url(self._proxies[index]))
+            except Exception as exc:
+                log.warning(f"抽样代理解析失败 (位置 {index + 1}): {exc}")
+        return parsed
+
     def __len__(self) -> int:
         return len(self._proxies)
 

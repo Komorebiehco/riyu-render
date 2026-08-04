@@ -1037,7 +1037,24 @@ async def test_proxy_connection(
             res_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
             status = res_line.decode("utf-8", errors="ignore")
             if "200" not in status:
-                return {"ok": False, "error": f"HTTP 代理 CONNECT 响应异常: {status.strip()}"}
+                match = re.search(r"HTTP/\d(?:\.\d)?\s+(\d+)(?:\s+(.*))?", status.strip())
+                status_code = int(match.group(1)) if match else None
+                reason = (match.group(2) or "").strip() if match else status.strip()
+                category = "http_rejected"
+                message = f"HTTP 代理拒绝 CONNECT ({status_code or '未知状态'})"
+                if status_code == 407:
+                    category = "auth_failed"
+                    message = "HTTP 代理认证失败，请检查用户名和密码"
+                elif status_code == 429:
+                    category = "bandwidth_exhausted"
+                    message = "代理供应商返回 429，套餐流量或带宽额度不足"
+                return {
+                    "ok": False,
+                    "category": category,
+                    "status_code": status_code,
+                    "error": message,
+                    "detail": reason,
+                }
         else:
             return {"ok": False, "error": f"不支持的代理协议: {scheme}"}
 
@@ -1051,8 +1068,10 @@ async def test_proxy_connection(
             "message": f"代理连通成功 (延迟 {latency_ms}ms)",
         }
 
+    except asyncio.TimeoutError:
+        return {"ok": False, "category": "timeout", "error": "代理测试超时"}
     except Exception as e:
-        return {"ok": False, "error": f"代理测试握手失败: {e}"}
+        return {"ok": False, "category": "handshake_failed", "error": f"代理测试握手失败: {e}"}
     finally:
         writer.close()
         try:
@@ -1173,10 +1192,49 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
     proxy_url = payload.get("proxy_url") or config.proxy.CUSTOM_PROXY
     if not proxy_url and config.proxy.MODE == "file":
         from src.sanitizer.stealth_browser import get_proxy_pool
-        p = get_proxy_pool().next_proxy()
-        if p:
-            from src.config import format_proxy_url
-            proxy_url = format_proxy_url(p)
+        from src.config import format_proxy_url
+
+        sample_count = min(max(int(payload.get("sample_count", 8)), 1), 20)
+        proxies = get_proxy_pool().sample_proxies(sample_count)
+        if not proxies:
+            return web.json_response({"ok": False, "error": "代理池中没有可测试节点"})
+
+        timeout = min(max(float(payload.get("timeout", 8.0)), 2.0), 20.0)
+        results = await asyncio.gather(*(
+            test_proxy_connection(format_proxy_url(proxy), timeout=timeout)
+            for proxy in proxies
+        ))
+        succeeded = [result for result in results if result.get("ok")]
+        categories = Counter(
+            str(result.get("category", "unknown"))
+            for result in results
+            if not result.get("ok")
+        )
+        response = {
+            "ok": bool(succeeded),
+            "mode": "file",
+            "sampled": len(results),
+            "succeeded": len(succeeded),
+            "failed": len(results) - len(succeeded),
+            "categories": dict(categories),
+        }
+        if succeeded:
+            fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))
+            response.update({
+                "latency_ms": fastest.get("latency_ms"),
+                "message": f"代理池抽样通过：{len(succeeded)}/{len(results)} 个节点可用",
+            })
+        elif categories.get("bandwidth_exhausted") == len(results):
+            response.update({
+                "error": "抽样节点全部返回 429：代理套餐流量或带宽额度已耗尽，请在供应商处续费或更换代理池",
+                "category": "bandwidth_exhausted",
+            })
+        else:
+            response.update({
+                "error": f"代理池抽样未发现可用节点（已测试 {len(results)} 个）",
+                "category": categories.most_common(1)[0][0] if categories else "unknown",
+            })
+        return web.json_response(response)
 
     if not proxy_url:
         return web.json_response({"ok": False, "error": "请先输入或选择要测试的代理地址"})

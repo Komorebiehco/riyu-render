@@ -720,6 +720,7 @@ footer { padding: 8px 34px 22px; color: var(--muted); text-align: center; font-s
   line-height: 1.5;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .test-result-box.success { background: var(--green-soft); color: var(--green); border: 1px solid #bce9da; }
