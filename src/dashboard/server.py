@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import hmac
 import json
 import math
 import os
 import re
+import time
 import uuid
 from collections import Counter, deque
 from datetime import datetime, timedelta, timezone
@@ -70,38 +72,121 @@ FAILURE_LABELS = {
 }
 
 _INVALID_EXPORT_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+_SESSION_COOKIE = "riyu_session"
+_SESSION_MAX_AGE = 7 * 24 * 60 * 60
+
+
+def _session_secret() -> bytes:
+    secret = os.environ.get("DASHBOARD_SESSION_SECRET", "")
+    if not secret:
+        raise RuntimeError("DASHBOARD_SESSION_SECRET is not configured")
+    return secret.encode("utf-8")
+
+
+def _make_session(username: str) -> str:
+    issued_at = str(int(time.time()))
+    payload = f"{username}:{issued_at}"
+    signature = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
+    encoded = base64.urlsafe_b64encode(payload.encode()).decode().rstrip("=")
+    return f"v1.{encoded}.{signature}"
+
+
+def _valid_session(value: str) -> bool:
+    try:
+        version, encoded, signature = value.split(".", 2)
+        if version != "v1":
+            return False
+        padding = "=" * (-len(encoded) % 4)
+        payload = base64.urlsafe_b64decode(encoded + padding).decode("utf-8")
+        username, issued_text = payload.rsplit(":", 1)
+        issued_at = int(issued_text)
+    except (ValueError, UnicodeDecodeError):
+        return False
+
+    expected_user = os.environ.get("DASHBOARD_USERNAME", "coujidan")
+    age = int(time.time()) - issued_at
+    expected_signature = hmac.new(
+        _session_secret(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return (
+        hmac.compare_digest(username, expected_user)
+        and hmac.compare_digest(signature, expected_signature)
+        and 0 <= age <= _SESSION_MAX_AGE
+    )
+
+
+def _safe_next(value: str | None) -> str:
+    if not value or not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
 
 
 @web.middleware
-async def _basic_auth(request: web.Request, handler):
-    """Protect every route except the Render health probe."""
-    if request.path == "/api/health":
+async def _session_auth(request: web.Request, handler):
+    """Protect the dashboard with a signed, short-lived browser session."""
+    public_paths = {
+        "/api/health",
+        "/login",
+        "/login.css",
+        "/assets/forest-theme.png",
+    }
+    if request.path in public_paths:
         return await handler(request)
 
-    expected_user = os.environ.get("DASHBOARD_USERNAME", "riyu")
+    if _valid_session(request.cookies.get(_SESSION_COOKIE, "")):
+        return await handler(request)
+
+    if request.path.startswith("/api/"):
+        return web.json_response({"message": "authentication required"}, status=401)
+    location = "/login?next=" + quote(_safe_next(request.path_qs), safe="")
+    raise web.HTTPFound(location=location)
+
+
+async def _login_page(_: web.Request) -> web.StreamResponse:
+    response = web.FileResponse(STATIC_DIR / "login.html")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _login_css(_: web.Request) -> web.StreamResponse:
+    response = web.FileResponse(STATIC_DIR / "login.css")
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+async def _login(request: web.Request) -> web.StreamResponse:
+    data = await request.post()
+    username = str(data.get("username", ""))
+    password = str(data.get("password", ""))
+    expected_user = os.environ.get("DASHBOARD_USERNAME", "coujidan")
     expected_password = os.environ.get("DASHBOARD_PASSWORD", "")
+    next_path = _safe_next(str(data.get("next", "/")))
+
     if not expected_password:
         raise web.HTTPServiceUnavailable(text="dashboard authentication is not configured")
-
-    supplied_user = ""
-    supplied_password = ""
-    header = request.headers.get("Authorization", "")
-    if header.startswith("Basic "):
-        try:
-            decoded = base64.b64decode(header[6:], validate=True).decode("utf-8")
-            supplied_user, supplied_password = decoded.split(":", 1)
-        except (ValueError, UnicodeDecodeError):
-            pass
-
     if not (
-        hmac.compare_digest(supplied_user, expected_user)
-        and hmac.compare_digest(supplied_password, expected_password)
+        hmac.compare_digest(username, expected_user)
+        and hmac.compare_digest(password, expected_password)
     ):
-        raise web.HTTPUnauthorized(
-            text="authentication required",
-            headers={"WWW-Authenticate": 'Basic realm="RIYU", charset="UTF-8"'},
-        )
-    return await handler(request)
+        raise web.HTTPFound(location="/login?error=1")
+
+    response = web.HTTPFound(location=next_path)
+    response.set_cookie(
+        _SESSION_COOKIE,
+        _make_session(username),
+        max_age=_SESSION_MAX_AGE,
+        httponly=True,
+        secure=os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true",
+        samesite="Lax",
+        path="/",
+    )
+    raise response
+
+
+async def _logout(_: web.Request) -> web.StreamResponse:
+    response = web.HTTPFound(location="/login")
+    response.del_cookie(_SESSION_COOKIE, path="/")
+    raise response
 
 
 def mask_email(value: str) -> str:
@@ -1091,9 +1176,12 @@ async def create_app() -> web.Application:
 
     app = web.Application(
         client_max_size=6 * 1024 * 1024,
-        middlewares=[_basic_auth],
+        middlewares=[_session_auth],
     )
     app.router.add_get("/api/health", _health)
+    app.router.add_get("/login", _login_page)
+    app.router.add_post("/login", _login)
+    app.router.add_post("/logout", _logout)
     app.router.add_get("/api/dashboard/summary", _summary)
     app.router.add_get("/api/dashboard/trend", _trend)
     app.router.add_get("/api/dashboard/steps", _steps)
@@ -1112,6 +1200,7 @@ async def create_app() -> web.Application:
     app.router.add_post("/api/settings/proxy", _save_proxy_settings_view)
     app.router.add_post("/api/settings/proxy/test", _test_proxy_view)
     app.router.add_get("/assets/{name}", _static_asset)
+    app.router.add_get("/login.css", _login_css)
     app.router.add_get("/", _static)
     app.router.add_get("/{name}", _static)
     return app
