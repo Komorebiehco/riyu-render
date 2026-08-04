@@ -143,16 +143,42 @@ class ProxyPool:
             log.warning(f"解析代理地址失败 ({proxy_url}): {e}")
             return None
 
-    def sample_proxies(self, count: int = 8) -> list[dict]:
-        """Return evenly distributed, parsed proxies without exposing raw values."""
+    def sample_proxies(self, count: int = 40) -> list[dict]:
+        """Return proxies spanning distinct credential groups and the full file."""
         if not self._proxies or count <= 0:
             return []
         sample_count = min(count, len(self._proxies))
-        if sample_count == 1:
-            indexes = [self._index % len(self._proxies)]
-        else:
+        parsed_by_index: list[tuple[int, dict]] = []
+        for index, raw_proxy in enumerate(self._proxies):
+            try:
+                parsed_by_index.append((index, _parse_proxy_url(raw_proxy)))
+            except Exception as exc:
+                log.warning(f"抽样代理解析失败 (位置 {index + 1}): {exc}")
+
+        distinct_indexes: list[int] = []
+        seen_credentials: set[tuple[str, str]] = set()
+        for index, proxy in parsed_by_index:
+            identity = (str(proxy.get("username", "")), str(proxy.get("password", "")))
+            if identity in seen_credentials:
+                continue
+            seen_credentials.add(identity)
+            distinct_indexes.append(index)
+            if len(distinct_indexes) >= sample_count:
+                break
+
+        indexes = distinct_indexes
+        if len(indexes) < sample_count:
             last = len(self._proxies) - 1
-            indexes = [round(position * last / (sample_count - 1)) for position in range(sample_count)]
+            evenly_spaced = (
+                [self._index % len(self._proxies)]
+                if sample_count == 1
+                else [round(position * last / (sample_count - 1)) for position in range(sample_count)]
+            )
+            for index in evenly_spaced:
+                if index not in indexes:
+                    indexes.append(index)
+                if len(indexes) >= sample_count:
+                    break
         self._index = (self._index + sample_count) % len(self._proxies)
         parsed: list[dict] = []
         for index in indexes:

@@ -56,7 +56,10 @@ async def test_http_429_is_classified_as_bandwidth_exhausted(monkeypatch):
 def test_proxy_pool_sampling_covers_the_full_file(monkeypatch, tmp_path):
     proxy_file = tmp_path / "proxies.txt"
     proxy_file.write_text(
-        "\n".join(f"127.0.0.{index}:3129" for index in range(1, 11)) + "\n",
+        "\n".join(
+            f"user{(index - 1) // 3}:pass{(index - 1) // 3}@127.0.0.{index}:3129"
+            for index in range(1, 11)
+        ) + "\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(config.proxy, "MODE", "file")

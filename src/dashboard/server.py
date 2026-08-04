@@ -1194,7 +1194,7 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
         from src.sanitizer.stealth_browser import get_proxy_pool
         from src.config import format_proxy_url
 
-        sample_count = min(max(int(payload.get("sample_count", 8)), 1), 20)
+        sample_count = min(max(int(payload.get("sample_count", 40)), 1), 50)
         pool = get_proxy_pool()
         proxies = pool.sample_proxies(sample_count)
         if not proxies:

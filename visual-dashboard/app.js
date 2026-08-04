@@ -1164,7 +1164,7 @@ async function testProxySettings() {
       body: JSON.stringify({
         proxy_url: mode === 'custom' ? customProxy : undefined,
         timeout: 8,
-        sample_count: mode === 'file' ? 8 : undefined
+        sample_count: mode === 'file' ? 40 : undefined
       })
     });
 
