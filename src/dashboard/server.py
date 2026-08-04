@@ -1195,7 +1195,8 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
         from src.config import format_proxy_url
 
         sample_count = min(max(int(payload.get("sample_count", 8)), 1), 20)
-        proxies = get_proxy_pool().sample_proxies(sample_count)
+        pool = get_proxy_pool()
+        proxies = pool.sample_proxies(sample_count)
         if not proxies:
             return web.json_response({"ok": False, "error": "代理池中没有可测试节点"})
 
@@ -1244,6 +1245,7 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
             "failed": len(results) - len(succeeded),
             "categories": dict(categories),
             "targets_tested": len(targets),
+            "pool_size": len(pool),
         }
         if succeeded:
             fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))

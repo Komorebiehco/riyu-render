@@ -76,6 +76,9 @@ def test_proxy_pool_sampling_covers_the_full_file(monkeypatch, tmp_path):
 @pytest.mark.asyncio
 async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
     class Pool:
+        def __len__(self):
+            return 3300
+
         def sample_proxies(self, count):
             return [parse_proxy_url(f"127.0.0.{index}:3129") for index in range(1, count + 1)]
 
@@ -99,6 +102,7 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
 
     assert '"sampled": 8' in payload
     assert '"targets_tested": 2' in payload
+    assert '"pool_size": 3300' in payload
     assert '"succeeded": 0' in payload
     assert '"bandwidth_exhausted": 8' in payload
     assert "429" in payload

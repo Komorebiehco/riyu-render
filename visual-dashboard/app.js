@@ -1175,12 +1175,28 @@ async function testProxySettings() {
         ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded} 个</span>`
         : `<span>协议: ${escapeHtml(res.scheme)}</span>`;
       resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> ${sampleInfo}`;
+      if (mode === 'file') {
+        const label = $('#proxyActiveLabel');
+        const pulse = $('#proxyPulse');
+        if (label) label.textContent = `代理池可用：抽样 ${res.succeeded}/${res.sampled}（共 ${res.pool_size || 0} 个）`;
+        if (pulse) pulse.className = 'pulse';
+      }
     } else {
       resBox.className = 'test-result-box error';
       const sampleInfo = res.sampled
         ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded || 0} 个</span>`
         : '';
       resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>${sampleInfo}`;
+      if (mode === 'file') {
+        const label = $('#proxyActiveLabel');
+        const pulse = $('#proxyPulse');
+        if (label) {
+          label.textContent = res.category === 'bandwidth_exhausted'
+            ? `代理池不可用：供应商额度不足（共 ${res.pool_size || 0} 个）`
+            : `代理池异常：抽样 0/${res.sampled || 0} 可用`;
+        }
+        if (pulse) pulse.className = 'pulse offline';
+      }
     }
   } catch (err) {
     resBox.className = 'test-result-box error';
