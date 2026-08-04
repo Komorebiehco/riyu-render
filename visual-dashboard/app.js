@@ -1172,13 +1172,13 @@ async function testProxySettings() {
       res.className = 'test-result-box success';
       resBox.className = 'test-result-box success';
       const sampleInfo = res.mode === 'file'
-        ? `<span>抽样 ${res.sampled} 个 · 可用 ${res.succeeded} 个</span>`
+        ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded} 个</span>`
         : `<span>协议: ${escapeHtml(res.scheme)}</span>`;
       resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> ${sampleInfo}`;
     } else {
       resBox.className = 'test-result-box error';
       const sampleInfo = res.sampled
-        ? `<span>抽样 ${res.sampled} 个 · 可用 ${res.succeeded || 0} 个</span>`
+        ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded || 0} 个</span>`
         : '';
       resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>${sampleInfo}`;
     }

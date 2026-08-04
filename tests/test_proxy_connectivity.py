@@ -98,6 +98,7 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
     payload = response.body.decode("utf-8")
 
     assert '"sampled": 8' in payload
+    assert '"targets_tested": 2' in payload
     assert '"succeeded": 0' in payload
     assert '"bandwidth_exhausted": 8' in payload
     assert "429" in payload

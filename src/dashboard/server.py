@@ -1200,10 +1200,36 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
             return web.json_response({"ok": False, "error": "代理池中没有可测试节点"})
 
         timeout = min(max(float(payload.get("timeout", 8.0)), 2.0), 20.0)
-        results = await asyncio.gather(*(
-            test_proxy_connection(format_proxy_url(proxy), timeout=timeout)
+        targets = (
+            ("www.google.com", 443),
+            ("www.cloudflare.com", 443),
+        )
+        target_results = await asyncio.gather(*(
+            test_proxy_connection(
+                format_proxy_url(proxy),
+                target_host=target_host,
+                target_port=target_port,
+                timeout=timeout,
+            )
             for proxy in proxies
+            for target_host, target_port in targets
         ))
+        results = []
+        for index in range(len(proxies)):
+            checks = target_results[index * len(targets):(index + 1) * len(targets)]
+            successful = next((check for check in checks if check.get("ok")), None)
+            if successful:
+                results.append(successful)
+                continue
+            categories_for_node = Counter(
+                str(check.get("category", "unknown")) for check in checks
+            )
+            primary = categories_for_node.most_common(1)[0][0]
+            representative = next(
+                check for check in checks
+                if str(check.get("category", "unknown")) == primary
+            )
+            results.append(representative)
         succeeded = [result for result in results if result.get("ok")]
         categories = Counter(
             str(result.get("category", "unknown"))
@@ -1217,6 +1243,7 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
             "succeeded": len(succeeded),
             "failed": len(results) - len(succeeded),
             "categories": dict(categories),
+            "targets_tested": len(targets),
         }
         if succeeded:
             fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))
