@@ -1,4 +1,5 @@
 import pytest
+from aiohttp import FormData
 from aiohttp.test_utils import TestClient, TestServer
 
 from src.dashboard.server import create_app
@@ -44,6 +45,23 @@ async def test_health_login_and_signed_session(monkeypatch, tmp_path):
 
         allowed = await client.get("/")
         assert allowed.status == 200
+
+        proxy_file = tmp_path / "proxies.txt"
+        monkeypatch.setattr("src.config.DEFAULT_PROXY_FILE", proxy_file)
+        monkeypatch.setattr("src.config.SETTINGS_FILE", tmp_path / "settings.json")
+        form = FormData()
+        form.add_field(
+            "file",
+            b"user:pass@127.0.0.1:8080\n127.0.0.2:1080:u:p\n",
+            filename="pool.txt",
+            content_type="text/plain",
+        )
+        proxy_upload = await client.post("/api/settings/proxy/file", data=form)
+        assert proxy_upload.status == 200
+        proxy_payload = await proxy_upload.json()
+        assert proxy_payload["loaded_count"] == 2
+        assert proxy_payload["proxy"]["mode"] == "file"
+        assert proxy_file.is_file()
 
         logout = await client.post("/logout", allow_redirects=False)
         assert logout.status == 302

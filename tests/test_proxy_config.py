@@ -7,6 +7,7 @@ from src.config import (
     format_proxy_url,
     load_persistent_settings,
     parse_proxy_url,
+    save_proxy_pool,
     save_proxy_settings,
 )
 from src.sanitizer.stealth_browser import ProxyPool
@@ -133,3 +134,22 @@ def test_parse_four_part_proxy():
     assert p2["port"] == 1080
     assert p2["username"] == "myuser"
     assert p2["password"] == "mypass"
+
+
+def test_save_proxy_pool_validates_and_writes_atomically(tmp_path):
+    target = tmp_path / "proxies.txt"
+    result = save_proxy_pool(
+        "# pool\nuser:pass@127.0.0.1:8080\n127.0.0.2:1080:u:p\n",
+        target,
+    )
+
+    assert result["count"] == 2
+    assert result["unique_count"] == 2
+    assert target.read_text(encoding="utf-8") == (
+        "user:pass@127.0.0.1:8080\n127.0.0.2:1080:u:p\n"
+    )
+
+    with pytest.raises(ValueError, match="无效行：2"):
+        save_proxy_pool("127.0.0.1:8080\nnot-a-proxy\n", target)
+
+    assert target.read_text(encoding="utf-8").startswith("user:pass@")

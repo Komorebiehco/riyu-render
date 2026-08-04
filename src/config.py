@@ -2,12 +2,14 @@
 import os
 import shutil
 from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 
 load_dotenv()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.getenv("DATA_DIR", str(PROJECT_ROOT / "data"))).expanduser()
+DEFAULT_PROXY_FILE = DATA_DIR / "proxies.txt"
 
 def _path_from_text(value: str | None) -> Path | None:
     if not value:
@@ -198,7 +200,7 @@ def format_proxy_url(proxy_dict: dict) -> str:
 class ProxyConfig:
     MODE: str = os.getenv("PROXY_MODE", "none")
     CUSTOM_PROXY: str = os.getenv("CUSTOM_PROXY", "")
-    PROXY_FILE: str = os.getenv("PROXY_FILE", "proxies.txt")
+    PROXY_FILE: str = os.getenv("PROXY_FILE", str(DEFAULT_PROXY_FILE))
     PROXY_API_URL: str = os.getenv("PROXY_API_URL", "")
     PROXY_TIMEOUT: int = int(os.getenv("PROXY_TIMEOUT", "15"))
 
@@ -323,7 +325,7 @@ def load_persistent_settings() -> None:
 def save_proxy_settings(
     mode: str,
     custom_proxy: str = "",
-    proxy_file: str = "proxies.txt",
+    proxy_file: str = str(DEFAULT_PROXY_FILE),
     proxy_api_url: str = "",
     proxy_timeout: int = 15,
 ) -> dict:
@@ -336,7 +338,11 @@ def save_proxy_settings(
 
     config.proxy.MODE = mode
     config.proxy.CUSTOM_PROXY = custom_proxy.strip()
-    config.proxy.PROXY_FILE = proxy_file.strip() or "proxies.txt"
+    resolved_proxy_file = proxy_file.strip() or str(DEFAULT_PROXY_FILE)
+    if mode == "file" and not Path(resolved_proxy_file).is_file():
+        raise ValueError("请先上传有效的代理池 TXT 文件")
+
+    config.proxy.PROXY_FILE = resolved_proxy_file
     config.proxy.PROXY_API_URL = proxy_api_url.strip()
     config.proxy.PROXY_TIMEOUT = int(proxy_timeout)
 
@@ -358,6 +364,47 @@ def save_proxy_settings(
         pass
 
     return config.proxy.to_dict()
+
+
+def save_proxy_pool(content: str, destination: Path | None = None) -> dict:
+    """Validate and atomically store an uploaded proxy pool."""
+    target = DEFAULT_PROXY_FILE if destination is None else Path(destination)
+    valid_lines: list[str] = []
+    invalid_line_numbers: list[int] = []
+
+    for line_number, raw_line in enumerate(content.splitlines(), start=1):
+        value = raw_line.strip().lstrip("\ufeff")
+        if not value or value.startswith("#"):
+            continue
+        try:
+            parse_proxy_url(value)
+        except (TypeError, ValueError):
+            invalid_line_numbers.append(line_number)
+            continue
+        valid_lines.append(value)
+
+    if invalid_line_numbers:
+        preview = ", ".join(str(number) for number in invalid_line_numbers[:20])
+        suffix = "..." if len(invalid_line_numbers) > 20 else ""
+        raise ValueError(f"代理文件包含无效行：{preview}{suffix}")
+    if not valid_lines:
+        raise ValueError("代理文件中没有可用节点")
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp")
+    try:
+        temporary.write_text("\n".join(valid_lines) + "\n", encoding="utf-8")
+        os.replace(temporary, target)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+    return {
+        "path": str(target),
+        "name": target.name,
+        "count": len(valid_lines),
+        "unique_count": len(set(valid_lines)),
+        "size": target.stat().st_size,
+    }
 
 
 load_persistent_settings()

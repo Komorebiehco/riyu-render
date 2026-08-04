@@ -72,6 +72,14 @@ HEADLESS=false  # false: 弹出无痕 Chrome/Edge 窗口；true: 无头静默运
 Chrome/Edge。`GET /api/health` 会返回浏览器就绪状态；浏览器不可用时，
 面板会拒绝提交清洗任务，并给出明确的修复提示。
 
+### Render 网页代理池上传
+
+登录线上工作台后，在“设置 → 代理配置”选择“代理池文件”，点击“选择 TXT
+文件”再上传即可。系统会逐行校验代理格式，校验通过后写入持久化目录
+`data/proxies.txt`，自动启用代理池并显示已载入节点数。该目录会随 Supabase
+快照恢复，Render 重启不会丢失代理池。单个文件最大 5 MB，支持带协议 URL、
+`user:pass@host:port`、`host:port:user:pass` 和 `host:port` 等格式。
+
 浏览器始终使用无痕参数和独立的非持久化 Context，不会复用日常浏览器
 Cookie、扩展或用户资料；任务结束后该临时会话会自动销毁。
 

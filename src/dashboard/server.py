@@ -1064,9 +1064,68 @@ async def test_proxy_connection(
 async def _get_proxy_settings(_: web.Request) -> web.Response:
     from src.sanitizer.stealth_browser import get_proxy_pool
     pool = get_proxy_pool()
+    proxy_path = Path(config.proxy.PROXY_FILE)
     return web.json_response({
         "proxy": config.proxy.to_dict(),
         "loaded_count": len(pool),
+        "file": {
+            "present": proxy_path.is_file(),
+            "name": proxy_path.name,
+            "size": proxy_path.stat().st_size if proxy_path.is_file() else 0,
+        },
+    })
+
+
+async def _upload_proxy_file(request: web.Request) -> web.Response:
+    reader = await request.multipart()
+    file_field = await reader.next()
+    if file_field is None or file_field.name != "file":
+        raise web.HTTPBadRequest(text="缺少 file 字段")
+
+    filename = Path(file_field.filename or "").name
+    if not filename.lower().endswith(".txt"):
+        raise web.HTTPBadRequest(text="仅支持 .txt 代理池文件")
+
+    raw_content = await file_field.read()
+    max_size = 5 * 1024 * 1024
+    if len(raw_content) > max_size:
+        raise web.HTTPRequestEntityTooLarge(
+            max_size=max_size,
+            actual_size=len(raw_content),
+            text="文件过大，最大 5MB",
+        )
+    try:
+        content = raw_content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise web.HTTPBadRequest(text="代理池文件必须使用 UTF-8 编码") from exc
+
+    from src.config import DEFAULT_PROXY_FILE, save_proxy_pool, save_proxy_settings
+    try:
+        stored = save_proxy_pool(content, DEFAULT_PROXY_FILE)
+        saved = save_proxy_settings(
+            mode="file",
+            custom_proxy=config.proxy.CUSTOM_PROXY,
+            proxy_file=stored["path"],
+            proxy_api_url=config.proxy.PROXY_API_URL,
+            proxy_timeout=config.proxy.PROXY_TIMEOUT,
+        )
+    except ValueError as err:
+        raise web.HTTPBadRequest(text=str(err)) from err
+
+    from src.sanitizer.stealth_browser import get_proxy_pool
+    loaded_count = len(get_proxy_pool())
+    return web.json_response({
+        "status": "ok",
+        "proxy": saved,
+        "file": {
+            "name": filename,
+            "stored_name": stored["name"],
+            "size": stored["size"],
+            "count": stored["count"],
+            "unique_count": stored["unique_count"],
+        },
+        "loaded_count": loaded_count,
+        "message": f"代理池上传成功，已载入 {loaded_count} 个节点",
     })
 
 
@@ -1198,6 +1257,7 @@ async def create_app() -> web.Application:
     app.router.add_delete("/api/exports/{filename}", _delete_export)
     app.router.add_get("/api/settings/proxy", _get_proxy_settings)
     app.router.add_post("/api/settings/proxy", _save_proxy_settings_view)
+    app.router.add_post("/api/settings/proxy/file", _upload_proxy_file)
     app.router.add_post("/api/settings/proxy/test", _test_proxy_view)
     app.router.add_get("/assets/{name}", _static_asset)
     app.router.add_get("/login.css", _login_css)

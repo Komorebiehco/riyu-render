@@ -6,7 +6,7 @@
   <meta name="description" content="Kate Mu 森林主题账号安全处理工作台">
   <title>Kate Mu · 森林安全工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css?v=20260803-2">
+  <link rel="stylesheet" href="styles.css?v=20260804-3">
 </head>
 <body>
   <div class="app-shell">
@@ -375,10 +375,16 @@
             </div>
 
             <div class="settings-group mode-panel" id="fileProxyPanel" style="display: none;">
-              <label class="group-title">2. 代理文件配置与格式规范</label>
-              <div class="form-field full-width">
-                <label for="proxyFileInput">代理文件路径 (相对于根目录)</label>
-                <input type="text" id="proxyFileInput" placeholder="proxies.txt">
+              <label class="group-title">2. 上传代理池文件</label>
+              <input type="hidden" id="proxyFileInput" value="">
+              <input type="file" id="proxyPoolFileInput" accept=".txt,text/plain" hidden>
+              <div class="proxy-file-upload">
+                <button type="button" class="button button-secondary" id="chooseProxyFileBtn">选择 TXT 文件</button>
+                <div class="proxy-file-summary">
+                  <strong id="proxyPoolFileName">尚未上传代理池</strong>
+                  <small id="proxyPoolFileMeta">文件将保存到持久化存储</small>
+                </div>
+                <button type="button" class="button button-primary" id="uploadProxyFileBtn" disabled>上传并启用</button>
               </div>
               <div class="format-presets">
                 <span class="preset-label">代理池文件格式规范 (每行一个，自动解析以下格式)：</span>
@@ -438,6 +444,6 @@
   </div>
 
   <div class="toast" id="toast"><span>✓</span><p>数据已刷新</p></div>
-  <script src="app.js"></script>
+  <script src="app.js?v=20260804-3"></script>
 </body>
 </html>

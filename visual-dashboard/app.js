@@ -23,7 +23,8 @@ const state = {
   exportBusy: false,
   importStatus: { state: 'idle', message: '' },
   importTimer: null,
-  selectedFiles: []
+  selectedFiles: [],
+  proxyFile: null
 };
 
 const $ = selector => document.querySelector(selector);
@@ -932,8 +933,86 @@ async function loadProxySettings() {
     parseRawProxyToBuilder(proxy.custom_proxy || '');
     updateProxyModePanels(mode);
     updateProxyBadge(mode, data.loaded_count || 0);
+    updateProxyFileSummary(data.file, data.loaded_count || 0);
   } catch (err) {
     console.warn('Failed to load proxy settings:', err);
+  }
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes) || 0;
+  if (size < 1024) return `${size} B`;
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function updateProxyFileSummary(file, loadedCount = 0) {
+  const name = $('#proxyPoolFileName');
+  const meta = $('#proxyPoolFileMeta');
+  if (!name || !meta) return;
+
+  if (state.proxyFile) {
+    name.textContent = state.proxyFile.name;
+    meta.textContent = `${formatFileSize(state.proxyFile.size)} · 等待上传`;
+    return;
+  }
+  if (file && file.present) {
+    name.textContent = file.name || 'proxies.txt';
+    meta.textContent = `${formatFileSize(file.size)} · 已载入 ${loadedCount} 个节点`;
+    return;
+  }
+  name.textContent = '尚未上传代理池';
+  meta.textContent = '文件将保存到持久化存储';
+}
+
+function selectProxyFile(file) {
+  const uploadButton = $('#uploadProxyFileBtn');
+  if (!file) {
+    state.proxyFile = null;
+    if (uploadButton) uploadButton.disabled = true;
+    updateProxyFileSummary(null, 0);
+    return;
+  }
+  if (!file.name.toLowerCase().endsWith('.txt')) {
+    showToast('请选择 TXT 代理池文件');
+    return;
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    showToast('代理池文件最大为 5MB');
+    return;
+  }
+  state.proxyFile = file;
+  if (uploadButton) uploadButton.disabled = false;
+  updateProxyFileSummary(null, 0);
+}
+
+async function uploadProxyFile() {
+  if (!state.proxyFile) return;
+  const button = $('#uploadProxyFileBtn');
+  const form = new FormData();
+  form.append('file', state.proxyFile);
+  try {
+    if (button) { button.disabled = true; button.textContent = '上传中...'; }
+    const res = await apiFetch('/api/settings/proxy/file', {
+      method: 'POST',
+      body: form
+    });
+    state.proxyFile = null;
+    const fileMode = $('input[name="proxyMode"][value="file"]');
+    if (fileMode) fileMode.checked = true;
+    if ($('#proxyFileInput')) $('#proxyFileInput').value = res.proxy.proxy_file;
+    updateProxyModePanels('file');
+    updateProxyBadge('file', res.loaded_count || 0);
+    updateProxyFileSummary({
+      present: true,
+      name: res.file.stored_name,
+      size: res.file.size
+    }, res.loaded_count || 0);
+    showToast(res.message || '代理池已上传并启用');
+  } catch (err) {
+    showToast(`上传失败: ${err.message}`);
+  } finally {
+    if (button) { button.disabled = !state.proxyFile; button.textContent = '上传并启用'; }
   }
 }
 
@@ -1142,4 +1221,11 @@ function initProxyEvents() {
 
   const testBtn = $('#testProxyBtn');
   if (testBtn) testBtn.addEventListener('click', testProxySettings);
+
+  const fileInput = $('#proxyPoolFileInput');
+  const chooseButton = $('#chooseProxyFileBtn');
+  const uploadButton = $('#uploadProxyFileBtn');
+  if (chooseButton && fileInput) chooseButton.addEventListener('click', () => fileInput.click());
+  if (fileInput) fileInput.addEventListener('change', () => selectProxyFile(fileInput.files[0]));
+  if (uploadButton) uploadButton.addEventListener('click', uploadProxyFile);
 }
