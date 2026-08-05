@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -109,3 +110,34 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
     assert '"succeeded": 0' in payload
     assert '"bandwidth_exhausted": 8' in payload
     assert "429" in payload
+
+
+@pytest.mark.asyncio
+async def test_file_mode_reports_mixed_failure_breakdown(monkeypatch):
+    class Pool:
+        def __len__(self):
+            return 3300
+
+        def sample_proxies(self, count):
+            return [parse_proxy_url(f"127.0.0.{index}:3129") for index in range(1, count + 1)]
+
+    calls = 0
+
+    async def mixed_failures(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        category = "auth_failed" if calls > 6 else "bandwidth_exhausted"
+        return {"ok": False, "category": category, "error": category}
+
+    monkeypatch.setattr(config.proxy, "MODE", "file")
+    monkeypatch.setattr(config.proxy, "CUSTOM_PROXY", "")
+    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: Pool())
+    monkeypatch.setattr(server, "test_proxy_connection", mixed_failures)
+
+    response = await server._test_proxy_view(
+        _JsonRequest({"sample_count": 4, "timeout": 3})
+    )
+    payload = json.loads(response.body)
+
+    assert "额度耗尽 3 个" in payload["error"]
+    assert "认证失败 1 个" in payload["error"]

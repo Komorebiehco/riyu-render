@@ -1259,8 +1259,20 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
                 "category": "bandwidth_exhausted",
             })
         else:
+            category_labels = {
+                "bandwidth_exhausted": "额度耗尽",
+                "auth_failed": "认证失败",
+                "timeout": "连接超时",
+                "handshake_failed": "握手失败",
+                "http_rejected": "HTTP 拒绝",
+                "unknown": "未知错误",
+            }
+            breakdown = "、".join(
+                f"{category_labels.get(category, category)} {count} 个"
+                for category, count in categories.most_common()
+            )
             response.update({
-                "error": f"代理池抽样未发现可用节点（已测试 {len(results)} 个）",
+                "error": f"代理池抽样未发现可用节点：{breakdown}",
                 "category": categories.most_common(1)[0][0] if categories else "unknown",
             })
         return web.json_response(response)
