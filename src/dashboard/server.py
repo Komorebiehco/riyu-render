@@ -656,7 +656,7 @@ def _ensure_browser_ready() -> None:
         )
 
 
-def _submit_import_content(content: str, source_name: str) -> web.Response:
+async def _submit_import_content(content: str, source_name: str) -> web.Response:
     credentials, invalid = parse_txt_content(content)
     if not credentials:
         raise web.HTTPBadRequest(
@@ -668,8 +668,12 @@ def _submit_import_content(content: str, source_name: str) -> web.Response:
         )
 
     from src.storage.models import SanitizeTask
+    from src.storage.db_manager import get_db
 
     tasks = [SanitizeTask.from_credential(cred) for cred in credentials]
+    db = get_db()
+    await db.init()
+    await db.upsert_many([task.account for task in tasks])
     job, queue_position = _enqueue_import(tasks, source_name, len(invalid))
     return web.json_response({
         "accepted": len(credentials),
@@ -706,7 +710,7 @@ async def _import_txt(request: web.Request) -> web.Response:
         )
     content = raw_content.decode("utf-8", errors="replace")
     source_name = Path(filename).name or "上传文件.txt"
-    return _submit_import_content(content, source_name)
+    return await _submit_import_content(content, source_name)
 
 
 async def _import_text(request: web.Request) -> web.Response:
@@ -727,7 +731,7 @@ async def _import_text(request: web.Request) -> web.Response:
             actual_size=actual_size,
             text="内容过大，最大 5MB",
         )
-    return _submit_import_content(content, "粘贴输入")
+    return await _submit_import_content(content, "粘贴输入")
 
 
 def _import_status_payload() -> dict[str, Any]:

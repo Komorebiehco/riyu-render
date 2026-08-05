@@ -87,6 +87,9 @@ class TaskQueue:
                     asyncio.to_thread(engine.run_sync, task),
                     timeout=config.queue.TASK_TOTAL_TIMEOUT,
                 )
+                # Persist every terminal result, including failures. The engine
+                # checkpoints progress, but a worker exception can skip its final save.
+                await self._db.upsert(account)
 
                 elapsed = time.time() - start
 
@@ -118,6 +121,11 @@ class TaskQueue:
 
             except Exception as e:
                 log.exception(f"[W{worker_id}] 未处理异常: {e}")
+                task.account.mark_failed(FailReason.UNKNOWN, str(e))
+                try:
+                    await self._db.upsert(task.account)
+                except Exception:
+                    log.exception(f"[W{worker_id}] 失败任务持久化异常: {task.credential.gmail}")
                 get_stats().increment("failed")
                 get_stats().increment("other_fail")
 

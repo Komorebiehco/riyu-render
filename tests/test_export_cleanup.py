@@ -210,9 +210,19 @@ async def test_import_with_no_verified_records_does_not_create_empty_export(
 
 @pytest.mark.asyncio
 async def test_text_import_reuses_txt_parser_and_enqueues_batch(monkeypatch):
+    from src.storage import db_manager
+
     captured = {}
 
+    class _DB:
+        async def init(self):
+            captured["db_initialized"] = True
+
+        async def upsert_many(self, accounts):
+            captured["persisted"] = [account.model_copy(deep=True) for account in accounts]
+
     def fake_enqueue(tasks, source_name, rejected=0):
+        captured["persisted_before_enqueue"] = bool(captured.get("persisted"))
         captured["tasks"] = tasks
         captured["source"] = source_name
         captured["rejected"] = rejected
@@ -221,6 +231,7 @@ async def test_text_import_reuses_txt_parser_and_enqueues_batch(monkeypatch):
     monkeypatch.setattr(
         server.config.browser, "executable_available", lambda: True
     )
+    monkeypatch.setattr(db_manager, "get_db", lambda: _DB())
     monkeypatch.setattr(server, "_enqueue_import", fake_enqueue)
     request = _JsonRequest({
         "content": (
@@ -237,6 +248,12 @@ async def test_text_import_reuses_txt_parser_and_enqueues_batch(monkeypatch):
     assert payload["rejected"] == 1
     assert payload["queued"] is True
     assert payload["queue_position"] == 1
+    assert captured["db_initialized"] is True
+    assert captured["persisted_before_enqueue"] is True
+    assert [account.status for account in captured["persisted"]] == [
+        AccountStatus.PENDING,
+        AccountStatus.PENDING,
+    ]
     assert captured["source"] == "粘贴输入"
     assert captured["rejected"] == 1
     assert captured["tasks"][0].account.gmail == "first@example.com"

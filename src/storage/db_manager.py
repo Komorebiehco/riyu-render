@@ -155,6 +155,61 @@ class DBManager:
 
     # ── 查询 ────────────────────────────────────────────────
 
+    async def upsert_many(self, accounts: List[CleanAccount]) -> None:
+        """Persist a batch of accounts in one transaction."""
+        if not accounts:
+            return
+        values = []
+        for account in accounts:
+            values.append((
+                account.account_id,
+                account.gmail,
+                _cipher.encrypt(account.new_password or ""),
+                account.buyer_recovery_email,
+                _cipher.encrypt(account.new_totp_secret or ""),
+                _cipher.encrypt(json.dumps(account.backup_codes or [])),
+                _cipher.encrypt(account.new_cookies or ""),
+                account.status.value,
+                account.fail_reason.value if account.fail_reason else None,
+                account.fail_detail,
+                account.retry_count,
+                account.proxy_used,
+                account.step_progress.model_dump_json(),
+                account.created_at.isoformat(),
+                account.sanitized_at.isoformat() if account.sanitized_at else None,
+                account.verified_at.isoformat() if account.verified_at else None,
+                account.exported_at.isoformat() if account.exported_at else None,
+            ))
+        async with aiosqlite.connect(self._db_path) as db:
+            await db.executemany("""
+                INSERT INTO accounts (
+                    account_id, gmail,
+                    new_password_enc, buyer_recovery_email,
+                    new_totp_secret_enc, backup_codes_enc, new_cookies_enc,
+                    status, fail_reason, fail_detail,
+                    retry_count, proxy_used, step_progress,
+                    created_at, sanitized_at, verified_at, exported_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(gmail) DO UPDATE SET
+                    account_id            = excluded.account_id,
+                    new_password_enc      = excluded.new_password_enc,
+                    buyer_recovery_email  = excluded.buyer_recovery_email,
+                    new_totp_secret_enc   = excluded.new_totp_secret_enc,
+                    backup_codes_enc      = excluded.backup_codes_enc,
+                    new_cookies_enc       = excluded.new_cookies_enc,
+                    status                = excluded.status,
+                    fail_reason           = excluded.fail_reason,
+                    fail_detail           = excluded.fail_detail,
+                    retry_count           = excluded.retry_count,
+                    proxy_used            = excluded.proxy_used,
+                    step_progress         = excluded.step_progress,
+                    created_at            = excluded.created_at,
+                    sanitized_at          = excluded.sanitized_at,
+                    verified_at           = excluded.verified_at,
+                    exported_at           = excluded.exported_at
+            """, values)
+            await db.commit()
+
     async def get_by_gmail(self, gmail: str) -> Optional[CleanAccount]:
         """根据 Gmail 查询一条记录"""
         async with aiosqlite.connect(self._db_path) as db:

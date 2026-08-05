@@ -776,6 +776,41 @@ function setTime() {
   $('#currentTime').textContent = `数据更新于 ${now.toLocaleTimeString('zh-CN', { hour12: false })}`;
 }
 
+const VIEW_TARGETS = {
+  overview: 'overview',
+  tasks: 'tasks',
+  files: 'files',
+  accounts: 'tasks',
+  failures: 'failures',
+  logs: 'logs',
+  settings: 'settings'
+};
+
+function navigateToView(view, { updateHash = false, behavior = 'smooth' } = {}) {
+  const targetId = VIEW_TARGETS[view] || VIEW_TARGETS.overview;
+  const target = document.getElementById(targetId);
+  const navItem = $$('.nav-item').find(item => item.dataset.view === view);
+  if (!target || !navItem) return;
+
+  $$('.nav-item').forEach(item => {
+    const active = item === navItem;
+    item.classList.toggle('active', active);
+    if (active) item.setAttribute('aria-current', 'page');
+    else item.removeAttribute('aria-current');
+  });
+  $('#sidebar').classList.remove('open');
+
+  if (view === 'accounts') {
+    $('#taskSearch').value = '';
+    $('#statusFilter').value = 'all';
+    loadTasks();
+  }
+  if (updateHash && location.hash !== `#${view}`) {
+    history.pushState(null, '', `#${view}`);
+  }
+  target.scrollIntoView({ behavior, block: 'start' });
+}
+
 function initEvents() {
   $('#taskSearch').addEventListener('input', () => {
     clearTimeout(state.taskTimer);
@@ -801,11 +836,13 @@ function initEvents() {
   });
   $('#menuButton').addEventListener('click', () => $('#sidebar').classList.toggle('open'));
   $('#sidebarOverlay').addEventListener('click', () => $('#sidebar').classList.remove('open'));
-  $$('.nav-item').forEach(item => item.addEventListener('click', () => {
-    $$('.nav-item').forEach(nav => nav.classList.remove('active'));
-    item.classList.add('active');
-    $('#sidebar').classList.remove('open');
+  $$('.nav-item').forEach(item => item.addEventListener('click', event => {
+    event.preventDefault();
+    navigateToView(item.dataset.view, { updateHash: true });
   }));
+  window.addEventListener('hashchange', () => {
+    navigateToView(location.hash.slice(1) || 'overview');
+  });
   $('#pauseLogButton').addEventListener('click', event => {
     state.logsPaused = !state.logsPaused;
     event.currentTarget.textContent = state.logsPaused ? '▶ 继续滚动' : 'Ⅱ 暂停滚动';
@@ -900,6 +937,7 @@ function init() {
   setTime();
   setServiceState(false, new Date());
   initEvents();
+  navigateToView(location.hash.slice(1) || 'overview', { behavior: 'auto' });
   initProxyEvents();
   loadProxySettings();
   refreshAll();
