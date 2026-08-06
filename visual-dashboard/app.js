@@ -24,7 +24,9 @@ const state = {
   importStatus: { state: 'idle', message: '' },
   importTimer: null,
   selectedFiles: [],
-  proxyFile: null
+  proxyFiles: [],
+  selectedTasks: new Set(),
+  taskDeleteBusy: false
 };
 
 const $ = selector => document.querySelector(selector);
@@ -142,33 +144,57 @@ function renderFailures() {
 function renderTasks() {
   const body = $('#taskTableBody');
   if (!state.tasks.length) {
-    body.innerHTML = '<tr><td class="empty-row" colspan="7">没有匹配的任务</td></tr>';
+    body.innerHTML = '<tr><td class="empty-row" colspan="8">没有匹配的任务</td></tr>';
   } else {
     body.innerHTML = state.tasks.map(task => {
       const label = statusLabels[task.status] || task.status;
       const failure = task.failure ? ` · ${escapeHtml(task.failure)}` : '';
       const progress = Math.min(100, Math.max(0, Number(task.progress) || 0));
-      const processing = task.status === 'SANITIZING';
+      const locked = ['PENDING', 'SANITIZING'].includes(task.status);
       const currentStep = Number(task.current_step) || 0;
       const currentName = task.current_step_name || '';
-      const stepLabel = processing && currentStep
+      const stepLabel = task.status === 'SANITIZING' && currentStep
         ? `<small>第 ${currentStep}/8 步 · ${escapeHtml(currentName)}</small>`
         : '';
-      const deleteTitle = processing ? '正在处理的任务暂时不能删除' : `删除任务 ${escapeHtml(task.id)}`;
+      const deleteTitle = locked ? '待处理或正在处理的任务暂时不能删除' : `删除任务 ${escapeHtml(task.id)}`;
       return `
-        <tr>
+        <tr class="${state.selectedTasks.has(task.key) ? 'task-selected' : ''}">
+          <td class="task-select-cell"><input class="task-checkbox" type="checkbox" data-select-task="${escapeHtml(task.key)}" aria-label="选择任务 ${escapeHtml(task.id)}" ${locked ? 'disabled' : ''} ${state.selectedTasks.has(task.key) ? 'checked' : ''}></td>
           <td><span class="task-id">${escapeHtml(task.id)}</span></td>
           <td><div class="account-cell"><span class="account-badge">G</span>${escapeHtml(task.account)}</div></td>
           <td><span class="status-badge status-${escapeHtml(task.status)}" title="${failure || '运行正常'}">${label}</span></td>
           <td class="progress-cell"><div class="progress-info"><div><div class="mini-progress"><i style="width:${progress}%"></i></div>${stepLabel}</div><span>${progress}%</span></div></td>
           <td>${formatElapsed(task.elapsed_seconds)}</td>
           <td>${relativeTime(task.updated_at)}</td>
-          <td><button class="row-action row-delete" data-delete-task="${escapeHtml(task.key)}" data-task-id="${escapeHtml(task.id)}" title="${deleteTitle}" ${processing ? 'disabled' : ''}>删除</button></td>
+          <td><button class="row-action row-delete" data-delete-task="${escapeHtml(task.key)}" data-task-id="${escapeHtml(task.id)}" title="${deleteTitle}" ${locked ? 'disabled' : ''}>删除</button></td>
         </tr>`;
     }).join('');
   }
   $('#tableCount').textContent = `显示 ${state.tasks.length} 条记录`;
   $('#navTaskCount').textContent = state.summary ? state.summary.total : state.tasks.length;
+  updateTaskActions();
+}
+
+function updateTaskActions() {
+  const bulkButton = $('#bulkDeleteTasks');
+  const selectAll = $('#selectAllTasks');
+  const deletable = state.tasks.filter(task => !['PENDING', 'SANITIZING'].includes(task.status));
+  const selectedCount = state.selectedTasks.size;
+  if (bulkButton) {
+    bulkButton.disabled = state.taskDeleteBusy || selectedCount === 0;
+    const count = bulkButton.querySelector('b');
+    if (count) count.textContent = selectedCount;
+  }
+  if (selectAll) {
+    const selectedVisible = deletable.filter(task => state.selectedTasks.has(task.key)).length;
+    selectAll.disabled = state.taskDeleteBusy || deletable.length === 0;
+    selectAll.checked = deletable.length > 0 && selectedVisible === deletable.length;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < deletable.length;
+  }
+  const clearButton = $('#clearFailedTasks');
+  if (clearButton) {
+    clearButton.disabled = state.taskDeleteBusy || !(Number(state.summary?.failed) > 0);
+  }
 }
 
 function renderActivities() {
@@ -673,6 +699,7 @@ function applySummary(summary) {
   donut.style.background = segments.length
     ? `conic-gradient(${segments.join(', ')})`
     : '#e7ebf2';
+  updateTaskActions();
 }
 
 async function loadSummary() {
@@ -724,6 +751,10 @@ async function loadTasks() {
   const data = await apiFetch(`/api/tasks?${params.toString()}`);
   if (seq !== state.taskSeq) return;
   state.tasks = data.items || [];
+  const visibleKeys = new Set(state.tasks.map(task => task.key));
+  state.selectedTasks = new Set(
+    [...state.selectedTasks].filter(key => visibleKeys.has(key))
+  );
   renderTasks();
 }
 
@@ -737,6 +768,7 @@ async function deleteTask(button) {
   button.textContent = '删除中';
   try {
     await apiFetch(`/api/tasks/${encodeURIComponent(taskKey)}`, { method: 'DELETE' });
+    state.selectedTasks.delete(taskKey);
     await refreshAll({ silent: true });
     showToast(`任务 ${taskId} 已删除`);
   } catch (error) {
@@ -832,9 +864,26 @@ function initEvents() {
   });
   $('#statusFilter').addEventListener('change', loadTasks);
   $('#taskTableBody').addEventListener('click', event => {
+    const checkbox = event.target.closest('[data-select-task]');
+    if (checkbox) {
+      if (checkbox.checked) state.selectedTasks.add(checkbox.dataset.selectTask);
+      else state.selectedTasks.delete(checkbox.dataset.selectTask);
+      updateTaskActions();
+      return;
+    }
     const button = event.target.closest('[data-delete-task]');
     if (button && !button.disabled) deleteTask(button);
   });
+  $('#selectAllTasks').addEventListener('change', event => {
+    const deletable = state.tasks.filter(task => !['PENDING', 'SANITIZING'].includes(task.status));
+    deletable.forEach(task => {
+      if (event.target.checked) state.selectedTasks.add(task.key);
+      else state.selectedTasks.delete(task.key);
+    });
+    renderTasks();
+  });
+  $('#bulkDeleteTasks').addEventListener('click', bulkDeleteTasks);
+  $('#clearFailedTasks').addEventListener('click', clearFailedTasks);
   $('#refreshButton').addEventListener('click', () => refreshAll());
   $('#themeButton').addEventListener('click', () => {
     document.body.classList.toggle('dark');
@@ -1003,9 +1052,12 @@ function updateProxyFileSummary(file, loadedCount = 0) {
   const meta = $('#proxyPoolFileMeta');
   if (!name || !meta) return;
 
-  if (state.proxyFile) {
-    name.textContent = state.proxyFile.name;
-    meta.textContent = `${formatFileSize(state.proxyFile.size)} · 等待上传`;
+  if (state.proxyFiles.length) {
+    const totalSize = state.proxyFiles.reduce((sum, file) => sum + file.size, 0);
+    name.textContent = state.proxyFiles.length === 1
+      ? state.proxyFiles[0].name
+      : `${state.proxyFiles.length} 个文件待追加`;
+    meta.textContent = `${formatFileSize(totalSize)} · 将合并并去重后上传`;
     return;
   }
   if (file && file.present) {
@@ -1017,39 +1069,44 @@ function updateProxyFileSummary(file, loadedCount = 0) {
   meta.textContent = '文件将保存到持久化存储';
 }
 
-function selectProxyFile(file) {
+function selectProxyFiles(fileList) {
   const uploadButton = $('#uploadProxyFileBtn');
-  if (!file) {
-    state.proxyFile = null;
+  const files = [...(fileList || [])];
+  if (!files.length) {
+    state.proxyFiles = [];
     if (uploadButton) uploadButton.disabled = true;
     updateProxyFileSummary(null, 0);
     return;
   }
-  if (!file.name.toLowerCase().endsWith('.txt')) {
+  if (files.some(file => !file.name.toLowerCase().endsWith('.txt'))) {
     showToast('请选择 TXT 代理池文件');
     return;
   }
-  if (file.size > 5 * 1024 * 1024) {
-    showToast('代理池文件最大为 5MB');
+  if (files.some(file => file.size > 5 * 1024 * 1024)) {
+    showToast('单个代理池文件最大为 5MB');
     return;
   }
-  state.proxyFile = file;
+  if (files.reduce((sum, file) => sum + file.size, 0) > 20 * 1024 * 1024) {
+    showToast('本次代理池文件总量最大为 20MB');
+    return;
+  }
+  state.proxyFiles = files;
   if (uploadButton) uploadButton.disabled = false;
   updateProxyFileSummary(null, 0);
 }
 
 async function uploadProxyFile() {
-  if (!state.proxyFile) return;
+  if (!state.proxyFiles.length) return;
   const button = $('#uploadProxyFileBtn');
   const form = new FormData();
-  form.append('file', state.proxyFile);
+  state.proxyFiles.forEach(file => form.append('file', file, file.name));
   try {
     if (button) { button.disabled = true; button.textContent = '上传中...'; }
     const res = await apiFetch('/api/settings/proxy/file', {
       method: 'POST',
       body: form
     });
-    state.proxyFile = null;
+    state.proxyFiles = [];
     const fileMode = $('input[name="proxyMode"][value="file"]');
     if (fileMode) fileMode.checked = true;
     if ($('#proxyFileInput')) $('#proxyFileInput').value = res.proxy.proxy_file;
@@ -1064,7 +1121,52 @@ async function uploadProxyFile() {
   } catch (err) {
     showToast(`上传失败: ${err.message}`);
   } finally {
-    if (button) { button.disabled = !state.proxyFile; button.textContent = '上传并启用'; }
+    if (button) { button.disabled = !state.proxyFiles.length; button.textContent = '上传并启用'; }
+  }
+}
+
+async function bulkDeleteTasks() {
+  const ids = [...state.selectedTasks];
+  if (!ids.length || state.taskDeleteBusy) return;
+  if (!window.confirm(`确定删除已选择的 ${ids.length} 个任务？此操作无法撤销。`)) return;
+
+  state.taskDeleteBusy = true;
+  updateTaskActions();
+  try {
+    const result = await apiFetch('/api/tasks/bulk-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    state.selectedTasks.clear();
+    await refreshAll({ silent: true });
+    const skipped = result.skipped?.length || 0;
+    showToast(skipped ? `已删除 ${result.deleted} 个，${skipped} 个任务正在执行` : `已删除 ${result.deleted} 个任务`);
+  } catch (error) {
+    showToast(error.message || '批量删除失败');
+  } finally {
+    state.taskDeleteBusy = false;
+    updateTaskActions();
+  }
+}
+
+async function clearFailedTasks() {
+  const count = Number(state.summary?.failed) || 0;
+  if (!count || state.taskDeleteBusy) return;
+  if (!window.confirm(`确定清除全部 ${count} 条异常任务？此操作无法撤销。`)) return;
+
+  state.taskDeleteBusy = true;
+  updateTaskActions();
+  try {
+    const result = await apiFetch('/api/tasks/clear-failed', { method: 'POST' });
+    state.selectedTasks.clear();
+    await refreshAll({ silent: true });
+    showToast(`已清除 ${result.deleted || 0} 条异常任务`);
+  } catch (error) {
+    showToast(error.message || '清除异常失败');
+  } finally {
+    state.taskDeleteBusy = false;
+    updateTaskActions();
   }
 }
 
@@ -1301,6 +1403,6 @@ function initProxyEvents() {
   const chooseButton = $('#chooseProxyFileBtn');
   const uploadButton = $('#uploadProxyFileBtn');
   if (chooseButton && fileInput) chooseButton.addEventListener('click', () => fileInput.click());
-  if (fileInput) fileInput.addEventListener('change', () => selectProxyFile(fileInput.files[0]));
+  if (fileInput) fileInput.addEventListener('change', () => selectProxyFiles(fileInput.files));
   if (uploadButton) uploadButton.addEventListener('click', uploadProxyFile);
 }

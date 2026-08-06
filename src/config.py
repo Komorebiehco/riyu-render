@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import shutil
 from pathlib import Path
@@ -387,6 +387,7 @@ def save_proxy_pool(content: str, destination: Path | None = None) -> dict:
         preview = ", ".join(str(number) for number in invalid_line_numbers[:20])
         suffix = "..." if len(invalid_line_numbers) > 20 else ""
         raise ValueError(f"代理文件包含无效行：{preview}{suffix}")
+    valid_lines = list(dict.fromkeys(valid_lines))
     if not valid_lines:
         raise ValueError("代理文件中没有可用节点")
 

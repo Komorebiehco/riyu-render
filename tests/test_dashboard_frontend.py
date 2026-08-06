@@ -12,3 +12,15 @@ def test_dashboard_online_indicator_uses_dedicated_health_probe():
     assert "const healthResult = results[0];" in source
     assert "const online = healthResult.status === 'fulfilled';" in source
     assert "const online = results.every" not in source
+
+
+def test_dashboard_task_actions_and_multi_file_proxy_upload_contract():
+    source = APP_JS.read_text(encoding="utf-8")
+    html = (APP_JS.parent / "index.html").read_text(encoding="utf-8")
+
+    assert "/api/tasks/bulk-delete" in source
+    assert "/api/tasks/clear-failed" in source
+    assert "form.append('file', file, file.name)" in source
+    assert "multiple" in html
+    assert "clearFailedTasks" in html
+    assert "bulkDeleteTasks" in html

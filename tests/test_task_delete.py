@@ -1,4 +1,5 @@
 import json
+from unittest.mock import AsyncMock
 
 import aiosqlite
 import pytest
@@ -57,3 +58,68 @@ async def test_delete_task_rejects_processing_record(tmp_path, monkeypatch):
 
     rows = await server._fetch_rows("SELECT account_id FROM accounts")
     assert rows == [{"account_id": "task-running"}]
+
+
+def _json_request(method: str, path: str, payload: dict):
+    request = make_mocked_request(method, path)
+    request.json = AsyncMock(return_value=payload)
+    return request
+
+
+@pytest.mark.asyncio
+async def test_bulk_delete_tasks_removes_terminal_records_and_protects_active(tmp_path, monkeypatch):
+    db_path = tmp_path / "accounts.db"
+    await DBManager(str(db_path)).init()
+    for account_id, status in (
+        ("task-done", "VERIFIED"),
+        ("task-failed", "FAILED"),
+        ("task-pending", "PENDING"),
+        ("task-running", "SANITIZING"),
+    ):
+        await _insert_task(db_path, account_id, status)
+    monkeypatch.setattr(server, "_db_path", lambda: str(db_path))
+
+    response = await server._bulk_delete_tasks(
+        _json_request(
+            "POST",
+            "/api/tasks/bulk-delete",
+            {"ids": ["task-done", "task-failed", "task-pending", "task-running", "missing"]},
+        )
+    )
+
+    payload = json.loads(response.body)
+    assert payload["deleted"] == 2
+    assert set(payload["deleted_ids"]) == {"task-done", "task-failed"}
+    assert set(payload["skipped"]) == {"task-pending", "task-running"}
+    assert payload["missing"] == ["missing"]
+    rows = await server._fetch_rows("SELECT account_id, status FROM accounts ORDER BY account_id")
+    assert rows == [
+        {"account_id": "task-pending", "status": "PENDING"},
+        {"account_id": "task-running", "status": "SANITIZING"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_clear_failed_tasks_only_removes_failed_terminal_statuses(tmp_path, monkeypatch):
+    db_path = tmp_path / "accounts.db"
+    await DBManager(str(db_path)).init()
+    for account_id, status in (
+        ("task-failed", "FAILED"),
+        ("task-dead", "DEAD"),
+        ("task-partial", "PARTIAL"),
+        ("task-done", "VERIFIED"),
+        ("task-pending", "PENDING"),
+    ):
+        await _insert_task(db_path, account_id, status)
+    monkeypatch.setattr(server, "_db_path", lambda: str(db_path))
+
+    response = await server._clear_failed_tasks(make_mocked_request("POST", "/api/tasks/clear-failed"))
+
+    payload = json.loads(response.body)
+    assert payload["deleted"] == 3
+    assert set(payload["deleted_ids"]) == {"task-failed", "task-dead", "task-partial"}
+    rows = await server._fetch_rows("SELECT account_id, status FROM accounts ORDER BY account_id")
+    assert rows == [
+        {"account_id": "task-done", "status": "VERIFIED"},
+        {"account_id": "task-pending", "status": "PENDING"},
+    ]

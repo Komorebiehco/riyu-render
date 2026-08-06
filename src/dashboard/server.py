@@ -40,6 +40,7 @@ log = get_logger("DASH")
 COMPLETED_STATUSES = {"VERIFIED", "EXPORTED"}
 PROCESSING_STATUSES = {"VALIDATING", "SANITIZING"}
 FAILED_STATUSES = {"FAILED", "DEAD", "PARTIAL"}
+NON_DELETABLE_STATUSES = PROCESSING_STATUSES | {"PENDING"}
 
 _import_lock: asyncio.Lock | None = None
 _import_jobs: list[dict[str, Any]] = []
@@ -451,13 +452,89 @@ async def _delete_task(request: web.Request) -> web.Response:
         if not row:
             await db.rollback()
             raise web.HTTPNotFound(text="任务不存在或已被删除")
-        if row["status"] in PROCESSING_STATUSES:
+        if row["status"] in NON_DELETABLE_STATUSES:
             await db.rollback()
-            raise web.HTTPConflict(text="正在处理的任务不能删除，请等待完成")
+            raise web.HTTPConflict(text="待处理或正在处理的任务不能删除，请等待完成")
         await db.execute("DELETE FROM accounts WHERE account_id = ?", (account_id,))
         await db.commit()
 
     return web.json_response({"deleted": True, "id": account_id})
+
+
+async def _bulk_delete_tasks(request: web.Request) -> web.Response:
+    try:
+        payload = await request.json()
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise web.HTTPBadRequest(text="无效 JSON 请求体") from exc
+
+    raw_ids = payload.get("ids") if isinstance(payload, dict) else None
+    if not isinstance(raw_ids, list):
+        raise web.HTTPBadRequest(text="ids 必须是数组")
+    if len(raw_ids) > 200:
+        raise web.HTTPBadRequest(text="一次最多删除 200 个任务")
+
+    account_ids = list(dict.fromkeys(
+        str(value).strip() for value in raw_ids if str(value).strip()
+    ))
+    if not account_ids:
+        return web.json_response({"deleted": 0, "skipped": [], "missing": []})
+
+    placeholders = ",".join("?" for _ in account_ids)
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            f"SELECT account_id, status FROM accounts WHERE account_id IN ({placeholders})",
+            account_ids,
+        ) as cursor:
+            rows = await cursor.fetchall()
+
+        statuses = {row["account_id"]: row["status"] for row in rows}
+        missing = [account_id for account_id in account_ids if account_id not in statuses]
+        skipped = [
+            account_id for account_id in account_ids
+            if statuses.get(account_id) in NON_DELETABLE_STATUSES
+        ]
+        deletable = [
+            account_id for account_id in account_ids
+            if account_id in statuses and account_id not in skipped
+        ]
+        if deletable:
+            delete_placeholders = ",".join("?" for _ in deletable)
+            await db.execute(
+                f"DELETE FROM accounts WHERE account_id IN ({delete_placeholders})",
+                deletable,
+            )
+        await db.commit()
+
+    return web.json_response({
+        "deleted": len(deletable),
+        "deleted_ids": deletable,
+        "skipped": skipped,
+        "missing": missing,
+    })
+
+
+async def _clear_failed_tasks(request: web.Request) -> web.Response:
+    failed_statuses = sorted(FAILED_STATUSES)
+    placeholders = ",".join("?" for _ in failed_statuses)
+    async with aiosqlite.connect(_db_path()) as db:
+        db.row_factory = aiosqlite.Row
+        await db.execute("BEGIN IMMEDIATE")
+        async with db.execute(
+            f"SELECT account_id FROM accounts WHERE status IN ({placeholders})",
+            failed_statuses,
+        ) as cursor:
+            rows = await cursor.fetchall()
+        deleted_ids = [row["account_id"] for row in rows]
+        if deleted_ids:
+            await db.execute(
+                f"DELETE FROM accounts WHERE status IN ({placeholders})",
+                failed_statuses,
+            )
+        await db.commit()
+
+    return web.json_response({"deleted": len(deleted_ids), "deleted_ids": deleted_ids})
 
 
 async def _events(_: web.Request) -> web.Response:
@@ -1101,30 +1178,52 @@ async def _get_proxy_settings(_: web.Request) -> web.Response:
 
 async def _upload_proxy_file(request: web.Request) -> web.Response:
     reader = await request.multipart()
-    file_field = await reader.next()
-    if file_field is None or file_field.name != "file":
-        raise web.HTTPBadRequest(text="缺少 file 字段")
+    files: list[tuple[str, str, int]] = []
+    total_size = 0
+    max_file_size = 5 * 1024 * 1024
+    max_total_size = 20 * 1024 * 1024
+    while True:
+        file_field = await reader.next()
+        if file_field is None:
+            break
+        if file_field.name != "file":
+            await file_field.read()
+            continue
+        filename = Path(file_field.filename or "").name
+        if not filename.lower().endswith(".txt"):
+            raise web.HTTPBadRequest(text="仅支持 .txt 代理池文件")
+        raw_content = await file_field.read()
+        if len(raw_content) > max_file_size:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=max_file_size,
+                actual_size=len(raw_content),
+                text="单个文件最大 5MB",
+            )
+        total_size += len(raw_content)
+        if total_size > max_total_size:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=max_total_size,
+                actual_size=total_size,
+                text="本次上传文件总量最大 20MB",
+            )
+        try:
+            content = raw_content.decode("utf-8-sig")
+        except UnicodeDecodeError as exc:
+            raise web.HTTPBadRequest(text="代理池文件必须使用 UTF-8 编码") from exc
+        files.append((filename, content, len(raw_content)))
 
-    filename = Path(file_field.filename or "").name
-    if not filename.lower().endswith(".txt"):
-        raise web.HTTPBadRequest(text="仅支持 .txt 代理池文件")
-
-    raw_content = await file_field.read()
-    max_size = 5 * 1024 * 1024
-    if len(raw_content) > max_size:
-        raise web.HTTPRequestEntityTooLarge(
-            max_size=max_size,
-            actual_size=len(raw_content),
-            text="文件过大，最大 5MB",
-        )
-    try:
-        content = raw_content.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise web.HTTPBadRequest(text="代理池文件必须使用 UTF-8 编码") from exc
+    if not files:
+        raise web.HTTPBadRequest(text="至少选择一个 .txt 代理池文件")
 
     from src.config import DEFAULT_PROXY_FILE, save_proxy_pool, save_proxy_settings
     try:
-        stored = save_proxy_pool(content, DEFAULT_PROXY_FILE)
+        existing_content = ""
+        if DEFAULT_PROXY_FILE.is_file():
+            existing_content = DEFAULT_PROXY_FILE.read_text(encoding="utf-8")
+        combined_content = "\n".join(
+            part for part in [existing_content, *(content for _, content, _ in files)] if part
+        )
+        stored = save_proxy_pool(combined_content, DEFAULT_PROXY_FILE)
         saved = save_proxy_settings(
             mode="file",
             custom_proxy=config.proxy.CUSTOM_PROXY,
@@ -1141,14 +1240,16 @@ async def _upload_proxy_file(request: web.Request) -> web.Response:
         "status": "ok",
         "proxy": saved,
         "file": {
-            "name": filename,
+            "name": files[0][0] if len(files) == 1 else f"{len(files)} 个文件",
             "stored_name": stored["name"],
             "size": stored["size"],
             "count": stored["count"],
             "unique_count": stored["unique_count"],
+            "uploaded_files": [name for name, _, _ in files],
+            "uploaded_size": sum(size for _, _, size in files),
         },
         "loaded_count": loaded_count,
-        "message": f"代理池上传成功，已载入 {loaded_count} 个节点",
+        "message": f"已追加 {len(files)} 个文件，当前共载入 {loaded_count} 个节点",
     })
 
 
@@ -1337,7 +1438,7 @@ async def create_app() -> web.Application:
     await DBManager(_db_path()).init()
 
     app = web.Application(
-        client_max_size=6 * 1024 * 1024,
+        client_max_size=25 * 1024 * 1024,
         middlewares=[_session_auth],
     )
     app.router.add_get("/api/health", _health)
@@ -1349,6 +1450,8 @@ async def create_app() -> web.Application:
     app.router.add_get("/api/dashboard/steps", _steps)
     app.router.add_get("/api/dashboard/failures", _failures)
     app.router.add_get("/api/tasks", _tasks)
+    app.router.add_post("/api/tasks/bulk-delete", _bulk_delete_tasks)
+    app.router.add_post("/api/tasks/clear-failed", _clear_failed_tasks)
     app.router.add_delete("/api/tasks/{account_id}", _delete_task)
     app.router.add_get("/api/events", _events)
     app.router.add_post("/api/import/txt", _import_txt)

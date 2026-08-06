@@ -6,7 +6,7 @@
   <meta name="description" content="Kate Mu 森林主题账号安全处理工作台">
   <title>Kate Mu · 森林安全工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css?v=20260806-2">
+  <link rel="stylesheet" href="styles.css?v=20260806-3">
 </head>
 <body>
   <div class="app-shell">
@@ -160,7 +160,10 @@
           <article class="panel failure-panel" id="failures">
             <div class="panel-head">
               <div><h3>异常分类</h3><p>最近 24 小时</p></div>
-              <span class="total-failures" id="totalFailures">共 0 条</span>
+              <div class="failure-actions">
+                <span class="total-failures" id="totalFailures">共 0 条</span>
+                <button class="button button-danger compact" id="clearFailedTasks" type="button" disabled>清除异常</button>
+              </div>
             </div>
             <div class="failure-bars" id="failureBars"></div>
           </article>
@@ -178,11 +181,12 @@
                 <option value="PENDING">待处理</option>
                 <option value="FAILED">异常</option>
               </select>
+              <button class="button button-danger compact" id="bulkDeleteTasks" type="button" disabled>批量删除 <b>0</b></button>
             </div>
           </div>
           <div class="table-scroll">
             <table>
-              <thead><tr><th>任务 ID</th><th>账号</th><th>状态</th><th>流程进度</th><th>耗时</th><th>更新时间</th><th>操作</th></tr></thead>
+              <thead><tr><th class="task-select-cell"><input id="selectAllTasks" class="task-checkbox" type="checkbox" aria-label="选择全部可删除任务"></th><th>任务 ID</th><th>账号</th><th>状态</th><th>流程进度</th><th>耗时</th><th>更新时间</th><th>操作</th></tr></thead>
               <tbody id="taskTableBody"></tbody>
             </table>
           </div>
@@ -377,12 +381,12 @@
             <div class="settings-group mode-panel" id="fileProxyPanel" style="display: none;">
               <label class="group-title">2. 上传代理池文件</label>
               <input type="hidden" id="proxyFileInput" value="">
-              <input type="file" id="proxyPoolFileInput" accept=".txt,text/plain" hidden>
+               <input type="file" id="proxyPoolFileInput" accept=".txt,text/plain" multiple hidden>
               <div class="proxy-file-upload">
                 <button type="button" class="button button-secondary" id="chooseProxyFileBtn">选择 TXT 文件</button>
                 <div class="proxy-file-summary">
-                  <strong id="proxyPoolFileName">尚未上传代理池</strong>
-                  <small id="proxyPoolFileMeta">文件将保存到持久化存储</small>
+                 <strong id="proxyPoolFileName">尚未上传代理池</strong>
+                 <small id="proxyPoolFileMeta">可多选 TXT，追加合并到现有代理池</small>
                 </div>
                 <button type="button" class="button button-primary" id="uploadProxyFileBtn" disabled>上传并启用</button>
               </div>
@@ -444,6 +448,6 @@
   </div>
 
   <div class="toast" id="toast"><span>✓</span><p>数据已刷新</p></div>
-  <script src="app.js?v=20260806-2"></script>
+  <script src="app.js?v=20260806-3"></script>
 </body>
 </html>
