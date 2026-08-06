@@ -78,7 +78,68 @@ def test_proxy_pool_sampling_covers_the_full_file(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
+async def test_file_mode_prunes_only_failed_sampled_nodes(monkeypatch, tmp_path):
+    proxy_lines = [
+        "http://user:pass@127.0.0.1:3129",
+        "http://user:pass@127.0.0.2:3129",
+        "http://user:pass@127.0.0.3:3129",
+        "http://user:pass@127.0.0.4:3129",
+    ]
+    proxy_file = tmp_path / "proxies.txt"
+    proxy_file.write_text("\n".join(proxy_lines) + "\n", encoding="utf-8")
+
+    class Pool:
+        def __init__(self):
+            self.reload_calls = 0
+            self.size = len(proxy_lines)
+
+        def __len__(self):
+            return self.size
+
+        def sample_proxies(self, count):
+            return [parse_proxy_url(line) for line in proxy_lines[:count - 1]]
+
+        def reload(self):
+            self.reload_calls += 1
+            self.size = len(
+                [line for line in proxy_file.read_text(encoding="utf-8").splitlines() if line]
+            )
+
+    pool = Pool()
+
+    async def probe(proxy_url, *_args, **_kwargs):
+        host = parse_proxy_url(proxy_url)["host"]
+        if host == "127.0.0.2":
+            return {"ok": True, "latency_ms": 20, "scheme": "http"}
+        category = "timeout" if host == "127.0.0.1" else "handshake_failed"
+        return {"ok": False, "category": category, "error": category}
+
+    monkeypatch.setattr(config.proxy, "MODE", "file")
+    monkeypatch.setattr(config.proxy, "CUSTOM_PROXY", "")
+    monkeypatch.setattr(config.proxy, "PROXY_FILE", str(proxy_file))
+    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: pool)
+    monkeypatch.setattr(server, "test_proxy_connection", probe)
+
+    response = await server._test_proxy_view(_JsonRequest({"sample_count": 4, "timeout": 3}))
+    payload = json.loads(response.body)
+
+    assert payload["sampled"] == 3
+    assert payload["succeeded"] == 1
+    assert payload["removed"] == 2
+    assert payload["initial_pool_size"] == 4
+    assert payload["pool_size"] == 2
+    assert pool.reload_calls == 1
+    assert proxy_file.read_text(encoding="utf-8").splitlines() == [proxy_lines[1], proxy_lines[3]]
+
+
+@pytest.mark.asyncio
+async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch, tmp_path):
+    proxy_file = tmp_path / "proxies.txt"
+    proxy_file.write_text(
+        "\n".join(f"127.0.0.{index}:3129" for index in range(1, 9)) + "\n",
+        encoding="utf-8",
+    )
+
     class Pool:
         def __len__(self):
             return 3300
@@ -96,6 +157,7 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
 
     monkeypatch.setattr(config.proxy, "MODE", "file")
     monkeypatch.setattr(config.proxy, "CUSTOM_PROXY", "")
+    monkeypatch.setattr(config.proxy, "PROXY_FILE", str(proxy_file))
     monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: Pool())
     monkeypatch.setattr(server, "test_proxy_connection", exhausted)
 
@@ -109,6 +171,8 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch):
     assert '"pool_size": 3300' in payload
     assert '"succeeded": 0' in payload
     assert '"bandwidth_exhausted": 8' in payload
+    assert '"removed": 0' in payload
+    assert len(proxy_file.read_text(encoding="utf-8").splitlines()) == 8
     assert "429" in payload
 
 

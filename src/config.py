@@ -366,7 +366,12 @@ def save_proxy_settings(
     return config.proxy.to_dict()
 
 
-def save_proxy_pool(content: str, destination: Path | None = None) -> dict:
+def save_proxy_pool(
+    content: str,
+    destination: Path | None = None,
+    *,
+    allow_empty: bool = False,
+) -> dict:
     """Validate and atomically store an uploaded proxy pool."""
     target = DEFAULT_PROXY_FILE if destination is None else Path(destination)
     valid_lines: list[str] = []
@@ -388,7 +393,7 @@ def save_proxy_pool(content: str, destination: Path | None = None) -> dict:
         suffix = "..." if len(invalid_line_numbers) > 20 else ""
         raise ValueError(f"代理文件包含无效行：{preview}{suffix}")
     valid_lines = list(dict.fromkeys(valid_lines))
-    if not valid_lines:
+    if not valid_lines and not allow_empty:
         raise ValueError("代理文件中没有可用节点")
 
     target.parent.mkdir(parents=True, exist_ok=True)

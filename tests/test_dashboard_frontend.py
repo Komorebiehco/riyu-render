@@ -24,3 +24,11 @@ def test_dashboard_task_actions_and_multi_file_proxy_upload_contract():
     assert "multiple" in html
     assert "clearFailedTasks" in html
     assert "bulkDeleteTasks" in html
+
+
+def test_dashboard_proxy_test_reports_automatic_pruning():
+    source = APP_JS.read_text(encoding="utf-8")
+
+    assert "res.removed" in source
+    assert "自动移除" in source
+    assert "res.pool_size" in source

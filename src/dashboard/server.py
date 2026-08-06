@@ -1287,6 +1287,46 @@ async def _save_proxy_settings_view(request: web.Request) -> web.Response:
     })
 
 
+def _prune_failed_proxy_nodes(raw_urls: set[str]) -> int:
+    """Remove exact failed file entries and atomically reload the proxy pool."""
+    if not raw_urls:
+        return 0
+
+    proxy_file = Path(config.proxy.PROXY_FILE)
+    try:
+        content = proxy_file.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        log.warning("读取代理池以清理失败节点时出错: %s", exc)
+        return 0
+
+    targets = {value.strip().lstrip("\ufeff") for value in raw_urls if value.strip()}
+    kept_lines: list[str] = []
+    removed = 0
+    for line in content.splitlines():
+        normalized = line.strip().lstrip("\ufeff")
+        if normalized and not normalized.startswith("#") and normalized in targets:
+            removed += 1
+            continue
+        kept_lines.append(line)
+
+    if not removed:
+        return 0
+
+    from src.config import save_proxy_pool
+    kept_content = "\n".join(kept_lines)
+    if content.endswith(("\n", "\r")):
+        kept_content += "\n"
+    try:
+        save_proxy_pool(kept_content, proxy_file, allow_empty=True)
+    except (OSError, ValueError) as exc:
+        log.warning("清理失败代理节点时未能保存代理池: %s", exc)
+        return 0
+
+    from src.sanitizer.stealth_browser import get_proxy_pool
+    get_proxy_pool().reload()
+    return removed
+
+
 async def _test_proxy_view(request: web.Request) -> web.Response:
     payload = {}
     if request.can_read_body:
@@ -1322,6 +1362,7 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
             for target_host, target_port in targets
         ))
         results = []
+        failed_raw_urls: set[str] = set()
         for index in range(len(proxies)):
             checks = target_results[index * len(targets):(index + 1) * len(targets)]
             successful = next((check for check in checks if check.get("ok")), None)
@@ -1337,12 +1378,18 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
                 if str(check.get("category", "unknown")) == primary
             )
             results.append(representative)
+            if primary != "bandwidth_exhausted":
+                raw_url = str(proxies[index].get("raw_url", "")).strip()
+                if raw_url:
+                    failed_raw_urls.add(raw_url)
         succeeded = [result for result in results if result.get("ok")]
         categories = Counter(
             str(result.get("category", "unknown"))
             for result in results
             if not result.get("ok")
         )
+        initial_pool_size = len(pool)
+        removed = _prune_failed_proxy_nodes(failed_raw_urls)
         response = {
             "ok": bool(succeeded),
             "mode": "file",
@@ -1352,6 +1399,8 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
             "categories": dict(categories),
             "targets_tested": len(targets),
             "pool_size": len(pool),
+            "initial_pool_size": initial_pool_size,
+            "removed": removed,
         }
         if succeeded:
             fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))

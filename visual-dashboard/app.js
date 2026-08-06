@@ -1328,7 +1328,10 @@ async function testProxySettings() {
       const sampleInfo = res.mode === 'file'
         ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded} 个</span>`
         : `<span>协议: ${escapeHtml(res.scheme)}</span>`;
-      resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> ${sampleInfo}`;
+      const pruneInfo = res.mode === 'file'
+        ? `<span>自动移除 ${res.removed || 0} 个失败节点 · 剩余 ${res.pool_size || 0} 个</span>`
+        : '';
+      resBox.innerHTML = `<strong>✓ ${escapeHtml(res.message || '代理连通正常')}</strong> ${sampleInfo} ${pruneInfo}`;
       if (mode === 'file') {
         const label = $('#proxyActiveLabel');
         const pulse = $('#proxyPulse');
@@ -1340,14 +1343,17 @@ async function testProxySettings() {
       const sampleInfo = res.sampled
         ? `<span>抽样 ${res.sampled} 个 · ${res.targets_tested || 1} 个目标 · 可用 ${res.succeeded || 0} 个</span>`
         : '';
-      resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>${sampleInfo}`;
+      const pruneInfo = res.mode === 'file'
+        ? `<span>自动移除 ${res.removed || 0} 个失败节点 · 剩余 ${res.pool_size || 0} 个</span>`
+        : '';
+      resBox.innerHTML = `<strong>✕ 连通测试失败</strong> <span>${escapeHtml(res.error || '无法连接')}</span>${sampleInfo} ${pruneInfo}`;
       if (mode === 'file') {
         const label = $('#proxyActiveLabel');
         const pulse = $('#proxyPulse');
         if (label) {
           label.textContent = res.category === 'bandwidth_exhausted'
-            ? `代理池不可用：供应商额度不足（共 ${res.pool_size || 0} 个）`
-            : `代理池异常：抽样 0/${res.sampled || 0} 可用`;
+            ? `代理池额度异常：失败节点未删除，剩余 ${res.pool_size || 0} 个`
+            : `代理池异常：抽样 ${res.succeeded || 0}/${res.sampled || 0} 可用，已移除 ${res.removed || 0} 个`;
         }
         if (pulse) pulse.className = 'pulse offline';
       }
