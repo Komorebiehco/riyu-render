@@ -29,13 +29,27 @@ def parse_txt_content(content: str) -> tuple[list[RawCredential], list[str]]:
         gmail = parts[0].lower()
         password = parts[1]
         totp_secret = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
+        old_recovery_email = None
+        cookies = None
+        if len(parts) > 3 and parts[3].strip():
+            fourth = parts[3].strip()
+            if fourth.startswith("[") or fourth.startswith("{"):
+                cookies = fourth
+            elif "@" in fourth:
+                old_recovery_email = fourth
 
         if "@" not in gmail or "." not in gmail.split("@", 1)[1]:
             invalid.append(f"第 {line_no} 行邮箱格式无效: {parts[0]}")
             continue
 
         credentials.append(
-            RawCredential(gmail=gmail, password=password, totp_secret=totp_secret)
+            RawCredential(
+                gmail=gmail,
+                password=password,
+                totp_secret=totp_secret,
+                old_recovery_email=old_recovery_email,
+                cookies=cookies,
+            )
         )
 
     return credentials, invalid

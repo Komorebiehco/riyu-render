@@ -79,6 +79,7 @@ class RawCredential(BaseModel):
     gmail:      str = Field(..., description="Google 账号邮箱")
     password:   str = Field(..., description="原始密码")
     totp_secret: Optional[str] = Field(None, description="原始 2FA Base32 密钥（如有）")
+    old_recovery_email: Optional[str] = Field(None, description="原始辅助邮箱（用于登录安全验证，如有）")
     cookies:    Optional[str]  = Field(None, description="原始 Cookie 字符串（JSON 格式，如有）")
     source:     Optional[str]  = Field(None, description="来源卡网名称或批次标识")
 

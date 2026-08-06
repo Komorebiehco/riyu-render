@@ -18,6 +18,7 @@ from rich.table import Table
 # 将项目根目录加入 sys.path（方便直接 python src/main.py 运行）
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from src import __version__
 from src.config import config
 from src.storage.db_manager import get_db
 from src.storage.models import AccountStatus, RawCredential, SanitizeTask
@@ -69,6 +70,7 @@ def _load_credentials_from_file(filepath: str) -> list[RawCredential]:
                             gmail=row[0].strip(),
                             password=row[1].strip(),
                             totp_secret=row[2].strip() if len(row) > 2 else None,
+                            old_recovery_email=row[3].strip() if len(row) > 3 and "@" in row[3] else None,
                         ))
             else:
                 for row in reader:
@@ -76,6 +78,7 @@ def _load_credentials_from_file(filepath: str) -> list[RawCredential]:
                         gmail=row.get("gmail", "").strip(),
                         password=row.get("password", "").strip(),
                         totp_secret=row.get("totp_secret", "").strip() or None,
+                        old_recovery_email=row.get("old_recovery_email", "").strip() or None,
                         cookies=row.get("cookies", "").strip() or None,
                         source=row.get("source", "").strip() or None,
                     ))
@@ -104,15 +107,19 @@ def _load_credentials_from_file(filepath: str) -> list[RawCredential]:
                     
                     # 如果有第 4 段，判断是 Cookie 还是旧辅助邮箱
                     cookies = None
+                    old_recovery_email = None
                     if len(parts) > 3 and parts[3]:
                         p3 = parts[3]
                         if p3.startswith("[") or p3.startswith("{"):
                             cookies = p3
+                        elif "@" in p3:
+                            old_recovery_email = p3
                     
                     credentials.append(RawCredential(
                         gmail=gmail,
                         password=password,
                         totp_secret=totp_secret,
+                        old_recovery_email=old_recovery_email,
                         cookies=cookies,
                     ))
     else:
@@ -126,12 +133,12 @@ def _load_credentials_from_file(filepath: str) -> list[RawCredential]:
 # ══════════════════════════════════════════════════════════════
 
 @click.group()
-@click.version_option("1.0.0", prog_name="Google 账号极速换绑防盗系统")
+@click.version_option(__version__, prog_name="Google 账号极速换绑防盗系统")
 def cli():
     """
     \b
     ╔══════════════════════════════════════════╗
-    ║  🚀 Google 账号极速换绑与防盗系统 v1.0  ║
+    ║  🚀 Google 账号极速换绑与防盗系统 v1.1  ║
     ╚══════════════════════════════════════════╝
     大体量买家专用 | 8步全链路切割 | 防卡网盗回
     """

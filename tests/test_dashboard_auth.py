@@ -18,6 +18,7 @@ async def test_health_login_and_signed_session(monkeypatch, tmp_path):
     async with TestClient(TestServer(await create_app())) as client:
         health = await client.get("/api/health")
         assert health.status == 200
+        assert (await health.json())["version"] == "1.1.0"
 
         denied = await client.get("/", allow_redirects=False)
         assert denied.status == 302

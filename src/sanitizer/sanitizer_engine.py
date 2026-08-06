@@ -376,8 +376,16 @@ class SanitizerEngine:
             await page.goto(SEL["recovery_email"]["page_url"], wait_until="domcontentloaded")
             await human_delay()
 
+            if not await self._handle_reauth_if_needed(page, cred):
+                account.mark_failed(FailReason.UNKNOWN, "Step2 二次身份验证需要未提供的凭证")
+                return False
+
             await safe_click(page, SEL["recovery_email"]["edit_btn"])
             await human_delay()
+
+            if not await self._handle_reauth_if_needed(page, cred):
+                account.mark_failed(FailReason.UNKNOWN, "Step2 二次身份验证需要未提供的凭证")
+                return False
 
             await safe_fill(page, SEL["recovery_email"]["new_email_input"], new_email)
             await safe_click(page, SEL["recovery_email"]["next_btn"])
@@ -461,11 +469,65 @@ class SanitizerEngine:
     # Step 5: 重置 2FA TOTP 密钥
     # ══════════════════════════════════════════════════════════
 
+    async def _handle_reauth_if_needed(self, page: Page, cred) -> bool:
+        """Handle a password, recovery-email, or TOTP re-check without logging secrets."""
+        await human_delay(1.0, 1.5)
+
+        password_input = page.locator(
+            "input[type='password']:not([aria-hidden='true']):not([name='hiddenPassword'])"
+        ).first
+        if await password_input.is_visible():
+            await password_input.fill(cred.password)
+            await human_delay(0.5, 1.0)
+            next_button = page.locator(
+                "#passwordNext button, button:has-text('Next'), button:has-text('下一步')"
+            ).first
+            if await next_button.is_visible():
+                await next_button.click()
+                await human_delay(2.0, 3.0)
+
+        recovery_selector = "input[name='knowledgePreregisteredEmailResponse']"
+        if "challenge/kpe" in (page.url or ""):
+            recovery_selector += ", input[type='email']"
+        recovery_input = page.locator(recovery_selector).first
+        if await recovery_input.is_visible():
+            recovery_email = getattr(cred, "old_recovery_email", None)
+            if not recovery_email:
+                return False
+            await recovery_input.fill(recovery_email)
+            next_button = page.locator(
+                "button:has-text('Next'), button:has-text('Confirm'), button:has-text('确认')"
+            ).first
+            if await next_button.is_visible():
+                await next_button.click()
+                await human_delay(2.0, 3.0)
+
+        totp_input = page.locator(SEL["login"]["totp_input"]).first
+        if await totp_input.is_visible():
+            if not cred.totp_secret:
+                return False
+            try:
+                code = pyotp.TOTP(cred.totp_secret).now()
+            except Exception:
+                return False
+            await totp_input.fill(code)
+            await human_delay(0.5, 1.0)
+            next_button = page.locator(SEL["login"]["totp_next_btn"]).first
+            if await next_button.is_visible():
+                await next_button.click()
+                await human_delay(2.0, 3.0)
+
+        return True
+
     async def _step5_reset_2fa(self, page: Page, cred, account: CleanAccount) -> bool:
         log.debug("Step5 重置 2FA")
         try:
             await page.goto(SEL["two_fa"]["authenticator_url"], wait_until="domcontentloaded")
             await human_delay()
+
+            if not await self._handle_reauth_if_needed(page, cred):
+                account.mark_failed(FailReason.UNKNOWN, "Step5 二次身份验证需要未提供的凭证")
+                return False
 
             opened = await safe_click(page, SEL["two_fa"]["change_btn"])
             if not opened:
@@ -476,6 +538,10 @@ class SanitizerEngine:
             if not opened:
                 log.warning("Step5 未找到更改或设置验证器按钮，尝试读取当前设置界面")
             await human_delay(1.0, 2.0)
+
+            if not await self._handle_reauth_if_needed(page, cred):
+                account.mark_failed(FailReason.UNKNOWN, "Step5 二次身份验证需要未提供的凭证")
+                return False
 
             # 点击"无法扫描"获取明文密钥
             await safe_click(page, SEL["two_fa"]["cant_scan_link"])

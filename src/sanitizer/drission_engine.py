@@ -331,6 +331,33 @@ class DrissionEngine:
     # Step 1: Login
     # ══════════════════════════════════════════════════════════
 
+    def _dismiss_intermediate_prompts(self, page: ChromiumPage) -> None:
+        """Dismiss explicit Google onboarding prompts without bypassing challenges."""
+        skip_xpath = (
+            "xpath://button[contains(., '以后再说') or contains(., 'Not now') "
+            "or contains(., 'Skip') or contains(., '暂不')]"
+        )
+        for _ in range(4):
+            current_url = page.url
+            if not any(
+                marker in current_url
+                for marker in ("speedbump", "passkeyenrollment", "recoveryoptions", "postsignin")
+            ):
+                return
+            skip_btn = (
+                page.ele(skip_xpath, timeout=3)
+                or page.ele("xpath://*[text()='以后再说' or text()='Not now' or text()='Skip' or text()='暂不']", timeout=3)
+                or page.ele("xpath://div[@role='button'][contains(., '以后再说') or contains(., 'Not now') or contains(., 'Skip')]", timeout=3)
+            )
+            if not skip_btn:
+                log.debug("Google intermediate prompt has no explicit skip action: {}", current_url)
+                return
+            try:
+                skip_btn.click()
+            except Exception:
+                skip_btn.click(by_js=True)
+            time.sleep(2)
+
     def _step1_login(self, page: ChromiumPage, cred, account: CleanAccount) -> bool:
         log.debug(f"Step1 Login: {cred.gmail}")
         try:
@@ -524,6 +551,7 @@ class DrissionEngine:
                 log.debug(f"Step1 after TOTP URL: {page.url}")
 
             time.sleep(2)
+            self._dismiss_intermediate_prompts(page)
             current = page.url
             if "myaccount.google.com" in current or "/u/0/" in current or "mail.google.com" in current:
                 log.info(f"Step1 login success: {cred.gmail}")
@@ -544,7 +572,14 @@ class DrissionEngine:
             account.mark_failed(FailReason.UNKNOWN, f"Step1 exception: {e}")
             return False
 
-    def handle_google_sudo_gate(self, page: ChromiumPage, password: str, totp_secret: str = None, gmail: str = None) -> bool:
+    def handle_google_sudo_gate(
+        self,
+        page: ChromiumPage,
+        password: str,
+        totp_secret: str = None,
+        gmail: str = None,
+        recovery_email: str = None,
+    ) -> bool:
         """
         While-Loop to clear Google Sudo gate (challenge/pwd and challenge/totp).
         Also handles accountchooser if session is expired.
@@ -578,6 +613,61 @@ class DrissionEngine:
                     log.warning("Sudo Gate: no account found in accountchooser")
                     break
 
+            if "challenge/selection" in current_url:
+                options = page.eles("xpath://div[@jsname='EBHGs']")
+                selected = None
+                for option in options:
+                    text = option.text or ""
+                    if recovery_email and any(
+                        marker in text.lower()
+                        for marker in ("recovery email", "confirm your recovery email")
+                    ):
+                        selected = option
+                        break
+                    if totp_secret and (
+                        option.attr("data-challengetype") == "6"
+                        or any(marker in text.lower() for marker in ("authenticator", "6-digit", "totp"))
+                    ):
+                        selected = option
+                        break
+                if selected:
+                    try:
+                        selected.click()
+                    except Exception:
+                        selected.click(by_js=True)
+                    time.sleep(2.5)
+                    current_url = page.url
+
+            is_recovery_email_challenge = (
+                "challenge/kpe" in current_url
+                or page.ele("xpath://input[@name='knowledgePreregisteredEmailResponse']", timeout=2)
+                or page.ele("xpath://*[contains(., 'Confirm your recovery email') or contains(., 'Confirm recovery email')]", timeout=2)
+            )
+            if is_recovery_email_challenge and recovery_email:
+                recovery_input = (
+                    page.ele("xpath://input[@name='knowledgePreregisteredEmailResponse']", timeout=3)
+                    or page.ele("xpath://input[@type='email']", timeout=3)
+                    or page.ele("xpath://input[@type='text']", timeout=3)
+                )
+                if recovery_input:
+                    recovery_input.click()
+                    recovery_input.clear()
+                    recovery_input.input(recovery_email)
+                    time.sleep(0.5)
+                    next_btn = (
+                        page.ele("xpath://button[contains(., 'Next') or contains(., 'Confirm')]", timeout=5)
+                        or page.ele("#next", timeout=3)
+                    )
+                    if next_btn:
+                        try:
+                            next_btn.click()
+                        except Exception:
+                            next_btn.click(by_js=True)
+                    else:
+                        recovery_input.input("\n")
+                    time.sleep(3)
+                    current_url = page.url
+
             is_pwd_challenge = (
                 "/v3/signin/challenge/pwd" in current_url or
                 "challenge/pwd" in current_url or
@@ -591,7 +681,7 @@ class DrissionEngine:
                 (page.ele("xpath://input[@type='tel']", timeout=2) and "challenge" in current_url)
             )
 
-            if not is_pwd_challenge and not is_totp_challenge:
+            if not is_pwd_challenge and not is_totp_challenge and not is_recovery_email_challenge and "challenge/selection" not in current_url:
                 break
 
             log.debug(f"Sudo Gate cycle {cycle + 1}/6, URL: {current_url}")
@@ -670,7 +760,13 @@ class DrissionEngine:
         log.info(f"Step2 preparing to change recovery email -> {new_email}")
         try:
             page.get("https://myaccount.google.com/recovery/email")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2)
 
             trigger_el = (
@@ -685,7 +781,13 @@ class DrissionEngine:
                 except Exception:
                     trigger_el.click(by_js=True)
                 time.sleep(2)
-                self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+                self.handle_google_sudo_gate(
+                    page,
+                    cred.password,
+                    cred.totp_secret,
+                    gmail=cred.gmail,
+                    recovery_email=cred.old_recovery_email,
+                )
 
             input_el = (
                 page.ele("xpath://input[@type='email']", timeout=8) or
@@ -742,7 +844,13 @@ class DrissionEngine:
 
             # Verify change was applied
             page.get("https://myaccount.google.com/recovery/email")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2)
             if new_email.lower() in page.html.lower():
                 log.info(f"Step2 recovery email changed: {new_email}")
@@ -788,7 +896,13 @@ class DrissionEngine:
         log.debug("Step3 removing recovery phone")
         try:
             page.get("https://myaccount.google.com/recovery/phone")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2)
             remove_btn = page.ele("xpath://button[contains(., 'Remove')]", timeout=8)
             if not remove_btn:
@@ -812,7 +926,13 @@ class DrissionEngine:
         log.debug("Step4 deleting Passkeys")
         try:
             page.get("https://myaccount.google.com/signinoptions/passkeys")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2)
             for _ in range(20):
                 del_btn = page.ele(
@@ -839,7 +959,13 @@ class DrissionEngine:
         log.debug("Step5 resetting / initializing 2FA")
         try:
             page.get("https://myaccount.google.com/two-step-verification/authenticator")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2)
 
             start_btn = (
@@ -991,7 +1117,13 @@ class DrissionEngine:
         log.info("Step6 preparing to change password")
         try:
             page.get("https://myaccount.google.com/signinoptions/password")
-            self.handle_google_sudo_gate(page, cred.password, cred.totp_secret, gmail=cred.gmail)
+            self.handle_google_sudo_gate(
+                page,
+                cred.password,
+                cred.totp_secret,
+                gmail=cred.gmail,
+                recovery_email=cred.old_recovery_email,
+            )
             time.sleep(2.5)
 
             log.debug(f"Step6 after Sudo gate URL: {page.url}")
@@ -1207,6 +1339,7 @@ class DrissionEngine:
                 target_pwd,
                 totp_secret_to_use,
                 gmail=account.gmail,
+                recovery_email=account.buyer_recovery_email,
             )
 
             if account.new_totp_secret and not totp_verified:

@@ -26,6 +26,7 @@ from urllib.parse import quote
 import aiosqlite
 from aiohttp import web
 
+from src import __version__
 from src.config import DATA_DIR, config
 from src.dashboard.txt_io import parse_txt_content, write_txt_export
 from src.monitor.logger import get_logger
@@ -1397,6 +1398,7 @@ async def _health(_: web.Request) -> web.Response:
     browser_ready = config.browser.executable_available()
     return web.json_response({
         "status": "ok" if browser_ready else "degraded",
+        "version": __version__,
         "mode": "read_only",
         "time": datetime.now(timezone.utc).isoformat(),
         "browser": {
