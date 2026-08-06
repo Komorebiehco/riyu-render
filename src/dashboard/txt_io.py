@@ -9,7 +9,7 @@ from src.storage.models import RawCredential
 
 
 def parse_txt_content(content: str) -> tuple[list[RawCredential], list[str]]:
-    """解析每行 `邮箱----密码----2FA`；2FA 可紧密或用空白分组。"""
+    """解析 `邮箱----密码----2FA` 或 `邮箱|密码|2FA` 行格式。"""
     credentials: list[RawCredential] = []
     invalid: list[str] = []
 
@@ -17,22 +17,33 @@ def parse_txt_content(content: str) -> tuple[list[RawCredential], list[str]]:
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
-        if "----" not in line:
-            invalid.append(f"第 {line_no} 行缺少 ---- 分隔符")
+        if "----" in line:
+            separator = "----"
+        elif "|" in line:
+            separator = "|"
+        else:
+            invalid.append(f"第 {line_no} 行缺少 ---- 或 | 分隔符")
             continue
 
-        parts = [part.strip() for part in line.split("----")]
+        parts = [part.strip() for part in line.split(separator)]
         if len(parts) < 2 or not parts[1]:
             invalid.append(f"第 {line_no} 行密码为空")
             continue
 
         gmail = parts[0].lower()
         password = parts[1]
-        totp_secret = parts[2].strip() if len(parts) > 2 and parts[2].strip() else None
+        third = parts[2].strip() if len(parts) > 2 else ""
+        fourth = parts[3].strip() if len(parts) > 3 else ""
+        totp_secret = third or None
         old_recovery_email = None
         cookies = None
-        if len(parts) > 3 and parts[3].strip():
-            fourth = parts[3].strip()
+        if "@" in third:
+            old_recovery_email = third
+            totp_secret = fourth or None
+            if fourth.startswith("[") or fourth.startswith("{"):
+                cookies = fourth
+                totp_secret = None
+        elif fourth:
             if fourth.startswith("[") or fourth.startswith("{"):
                 cookies = fourth
             elif "@" in fourth:

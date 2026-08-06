@@ -54,6 +54,45 @@ class TestTxtParser:
         finally:
             os.remove(tmp_path)
 
+    def test_parsers_support_pipe_delimited_credentials(self):
+        content = "user@example.com|password|SECRET|old@example.net\n"
+        credentials, invalid = parse_txt_content(content)
+
+        assert invalid == []
+        assert credentials[0].gmail == "user@example.com"
+        assert credentials[0].password == "password"
+        assert credentials[0].totp_secret == "SECRET"
+        assert credentials[0].old_recovery_email == "old@example.net"
+
+        with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write(content)
+            tmp_path = f.name
+        try:
+            loaded = _load_credentials_from_file(tmp_path)
+            assert loaded[0].old_recovery_email == "old@example.net"
+        finally:
+            os.remove(tmp_path)
+
+    @pytest.mark.parametrize("separator", ["----", "|"])
+    def test_parsers_support_swapped_totp_and_recovery_email(self, separator):
+        content = f"user@example.com{separator}password{separator}old@example.net{separator}SECRET\n"
+
+        credentials, invalid = parse_txt_content(content)
+
+        assert invalid == []
+        assert credentials[0].totp_secret == "SECRET"
+        assert credentials[0].old_recovery_email == "old@example.net"
+
+        with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False, encoding="utf-8") as f:
+            f.write(content)
+            tmp_path = f.name
+        try:
+            loaded = _load_credentials_from_file(tmp_path)
+            assert loaded[0].totp_secret == "SECRET"
+            assert loaded[0].old_recovery_email == "old@example.net"
+        finally:
+            os.remove(tmp_path)
+
     def test_parse_four_hyphens_format(self):
         """测试用户给出的 n62931142afca@gmail.com----Phanh48458----y7eax4iocyia3tapqokjnzk5piqqitub 格式"""
         content = "n62931142afca@gmail.com----Phanh48458----y7eax4iocyia3tapqokjnzk5piqqitub\n"

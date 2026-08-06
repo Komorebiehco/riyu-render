@@ -103,17 +103,24 @@ def _load_credentials_from_file(filepath: str) -> list[RawCredential]:
                 if len(parts) >= 2:
                     gmail = parts[0]
                     password = parts[1]
-                    totp_secret = parts[2] if len(parts) > 2 and parts[2] else None
+                    third = parts[2] if len(parts) > 2 else ""
+                    fourth = parts[3] if len(parts) > 3 else ""
+                    totp_secret = third or None
                     
                     # 如果有第 4 段，判断是 Cookie 还是旧辅助邮箱
                     cookies = None
                     old_recovery_email = None
-                    if len(parts) > 3 and parts[3]:
-                        p3 = parts[3]
-                        if p3.startswith("[") or p3.startswith("{"):
-                            cookies = p3
-                        elif "@" in p3:
-                            old_recovery_email = p3
+                    if "@" in third:
+                        old_recovery_email = third
+                        totp_secret = fourth or None
+                        if fourth.startswith("[") or fourth.startswith("{"):
+                            cookies = fourth
+                            totp_secret = None
+                    elif fourth:
+                        if fourth.startswith("[") or fourth.startswith("{"):
+                            cookies = fourth
+                        elif "@" in fourth:
+                            old_recovery_email = fourth
                     
                     credentials.append(RawCredential(
                         gmail=gmail,
