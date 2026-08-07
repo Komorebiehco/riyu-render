@@ -1431,14 +1431,9 @@ async def _test_proxy_pool_sample(sample_count: int, timeout: float) -> dict[str
         )
         results.append(representative)
 
-        has_quota_failure = any(
-            str(check.get("category", "unknown")) == "bandwidth_exhausted"
-            for check in checks
-        )
-        if not has_quota_failure:
-            raw_url = str(proxy.get("raw_url", "")).strip()
-            if raw_url:
-                failed_raw_urls.add(raw_url)
+        raw_url = str(proxy.get("raw_url", "")).strip()
+        if raw_url:
+            failed_raw_urls.add(raw_url)
 
     succeeded = [result for result in results if result.get("ok")]
     categories = Counter(
@@ -1468,7 +1463,7 @@ async def _test_proxy_pool_sample(sample_count: int, timeout: float) -> dict[str
         })
     elif categories.get("bandwidth_exhausted") == len(results):
         response.update({
-            "error": "抽样节点全部返回 429：代理套餐流量或带宽额度已耗尽，请在供应商处续费或更换代理池",
+            "error": f"抽样节点全部返回 429：已自动移除 {removed} 个额度耗尽节点",
             "category": "bandwidth_exhausted",
         })
     else:

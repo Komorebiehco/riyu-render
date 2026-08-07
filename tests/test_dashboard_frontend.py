@@ -32,6 +32,8 @@ def test_dashboard_proxy_test_reports_automatic_pruning():
 
     assert "res.removed" in source
     assert "自动移除" in source
+    assert "额度耗尽节点" in source
+    assert "失败节点未删除" not in source
     assert "res.pool_size" in source
     assert "auto_check_enabled" in source
     assert "auto_check_interval_seconds" in source

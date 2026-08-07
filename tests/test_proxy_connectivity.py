@@ -141,11 +141,22 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch, tmp_pat
     )
 
     class Pool:
+        def __init__(self):
+            self.size = 8
+
         def __len__(self):
-            return 3300
+            return self.size
 
         def sample_proxies(self, count):
             return [parse_proxy_url(f"127.0.0.{index}:3129") for index in range(1, count + 1)]
+
+        def reload(self):
+            self.size = len([
+                line for line in proxy_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ])
+
+    pool = Pool()
 
     async def exhausted(*_args, **_kwargs):
         return {
@@ -158,7 +169,7 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch, tmp_pat
     monkeypatch.setattr(config.proxy, "MODE", "file")
     monkeypatch.setattr(config.proxy, "CUSTOM_PROXY", "")
     monkeypatch.setattr(config.proxy, "PROXY_FILE", str(proxy_file))
-    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: Pool())
+    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: pool)
     monkeypatch.setattr(server, "test_proxy_connection", exhausted)
 
     response = await server._test_proxy_view(
@@ -168,26 +179,37 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch, tmp_pat
 
     assert '"sampled": 8' in payload
     assert '"targets_tested": 2' in payload
-    assert '"pool_size": 3300' in payload
+    assert '"pool_size": 0' in payload
     assert '"succeeded": 0' in payload
     assert '"bandwidth_exhausted": 8' in payload
-    assert '"removed": 0' in payload
-    assert len(proxy_file.read_text(encoding="utf-8").splitlines()) == 8
+    assert '"removed": 8' in payload
+    assert proxy_file.read_text(encoding="utf-8").strip() == ""
     assert "429" in payload
 
 
 @pytest.mark.asyncio
-async def test_file_mode_keeps_node_when_either_target_reports_quota_failure(monkeypatch, tmp_path):
+async def test_file_mode_removes_node_when_either_failure_is_quota_exhausted(monkeypatch, tmp_path):
     proxy_line = "http://user:pass@127.0.0.1:3129"
     proxy_file = tmp_path / "proxies.txt"
     proxy_file.write_text(proxy_line + "\n", encoding="utf-8")
 
     class Pool:
+        def __init__(self):
+            self.size = 1
+
         def __len__(self):
-            return 1
+            return self.size
 
         def sample_proxies(self, _count):
             return [parse_proxy_url(proxy_line)]
+
+        def reload(self):
+            self.size = len([
+                line for line in proxy_file.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ])
+
+    pool = Pool()
 
     calls = 0
 
@@ -199,14 +221,15 @@ async def test_file_mode_keeps_node_when_either_target_reports_quota_failure(mon
 
     monkeypatch.setattr(config.proxy, "MODE", "file")
     monkeypatch.setattr(config.proxy, "PROXY_FILE", str(proxy_file))
-    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: Pool())
+    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: pool)
     monkeypatch.setattr(server, "test_proxy_connection", mixed_quota_failure)
 
     result = await server._test_proxy_pool_sample(1, 3)
 
     assert result["sampled"] == 1
-    assert result["removed"] == 0
-    assert proxy_file.read_text(encoding="utf-8") == proxy_line + "\n"
+    assert result["removed"] == 1
+    assert result["pool_size"] == 0
+    assert proxy_file.read_text(encoding="utf-8").strip() == ""
 
 
 @pytest.mark.asyncio

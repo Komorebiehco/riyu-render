@@ -1424,7 +1424,7 @@ async function testProxySettings() {
         const pulse = $('#proxyPulse');
         if (label) {
           label.textContent = res.category === 'bandwidth_exhausted'
-            ? `代理池额度异常：失败节点未删除，剩余 ${res.pool_size || 0} 个`
+            ? `代理池额度异常：已移除 ${res.removed || 0} 个额度耗尽节点，剩余 ${res.pool_size || 0} 个`
             : `代理池异常：抽样 ${res.succeeded || 0}/${res.sampled || 0} 可用，已移除 ${res.removed || 0} 个`;
         }
         if (pulse) pulse.className = 'pulse offline';
