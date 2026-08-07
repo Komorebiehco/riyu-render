@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import shutil
 from pathlib import Path
@@ -203,6 +203,17 @@ class ProxyConfig:
     PROXY_FILE: str = os.getenv("PROXY_FILE", str(DEFAULT_PROXY_FILE))
     PROXY_API_URL: str = os.getenv("PROXY_API_URL", "")
     PROXY_TIMEOUT: int = int(os.getenv("PROXY_TIMEOUT", "15"))
+    AUTO_CHECK_ENABLED: bool = os.getenv("PROXY_AUTO_CHECK_ENABLED", "true").lower() not in {
+        "0", "false", "no", "off",
+    }
+    AUTO_CHECK_INTERVAL_SECONDS: int = max(
+        min(int(os.getenv("PROXY_AUTO_CHECK_INTERVAL_SECONDS", "900")), 86_400),
+        60,
+    )
+    AUTO_CHECK_SAMPLE_COUNT: int = min(
+        max(int(os.getenv("PROXY_AUTO_CHECK_SAMPLE_COUNT", "10")), 1),
+        50,
+    )
 
     def to_dict(self) -> dict:
         return {
@@ -211,6 +222,9 @@ class ProxyConfig:
             "proxy_file": self.PROXY_FILE,
             "proxy_api_url": self.PROXY_API_URL,
             "proxy_timeout": self.PROXY_TIMEOUT,
+            "auto_check_enabled": self.AUTO_CHECK_ENABLED,
+            "auto_check_interval_seconds": self.AUTO_CHECK_INTERVAL_SECONDS,
+            "auto_check_sample_count": self.AUTO_CHECK_SAMPLE_COUNT,
         }
 
 
@@ -318,6 +332,16 @@ def load_persistent_settings() -> None:
             config.proxy.PROXY_API_URL = str(proxy_data["proxy_api_url"])
         if "proxy_timeout" in proxy_data:
             config.proxy.PROXY_TIMEOUT = int(proxy_data["proxy_timeout"])
+        if "auto_check_enabled" in proxy_data:
+            config.proxy.AUTO_CHECK_ENABLED = bool(proxy_data["auto_check_enabled"])
+        if "auto_check_interval_seconds" in proxy_data:
+            config.proxy.AUTO_CHECK_INTERVAL_SECONDS = min(
+                max(int(proxy_data["auto_check_interval_seconds"]), 60), 86_400
+            )
+        if "auto_check_sample_count" in proxy_data:
+            config.proxy.AUTO_CHECK_SAMPLE_COUNT = min(
+                max(int(proxy_data["auto_check_sample_count"]), 1), 50
+            )
     except Exception:
         pass
 
@@ -328,6 +352,9 @@ def save_proxy_settings(
     proxy_file: str = str(DEFAULT_PROXY_FILE),
     proxy_api_url: str = "",
     proxy_timeout: int = 15,
+    auto_check_enabled: bool | None = None,
+    auto_check_interval_seconds: int | None = None,
+    auto_check_sample_count: int | None = None,
 ) -> dict:
     valid_modes = {"none", "custom", "file", "api"}
     if mode not in valid_modes:
@@ -345,6 +372,18 @@ def save_proxy_settings(
     config.proxy.PROXY_FILE = resolved_proxy_file
     config.proxy.PROXY_API_URL = proxy_api_url.strip()
     config.proxy.PROXY_TIMEOUT = int(proxy_timeout)
+    if auto_check_enabled is not None:
+        config.proxy.AUTO_CHECK_ENABLED = bool(auto_check_enabled)
+    if auto_check_interval_seconds is not None:
+        interval = int(auto_check_interval_seconds)
+        if not 60 <= interval <= 86_400:
+            raise ValueError("自动检测间隔必须在 60 到 86400 秒之间")
+        config.proxy.AUTO_CHECK_INTERVAL_SECONDS = interval
+    if auto_check_sample_count is not None:
+        sample_count = int(auto_check_sample_count)
+        if not 1 <= sample_count <= 50:
+            raise ValueError("自动检测抽样数量必须在 1 到 50 之间")
+        config.proxy.AUTO_CHECK_SAMPLE_COUNT = sample_count
 
     SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     existing = {}

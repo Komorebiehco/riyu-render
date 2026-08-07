@@ -177,6 +177,55 @@ async def test_file_mode_reports_when_all_samples_exhausted(monkeypatch, tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_file_mode_keeps_node_when_either_target_reports_quota_failure(monkeypatch, tmp_path):
+    proxy_line = "http://user:pass@127.0.0.1:3129"
+    proxy_file = tmp_path / "proxies.txt"
+    proxy_file.write_text(proxy_line + "\n", encoding="utf-8")
+
+    class Pool:
+        def __len__(self):
+            return 1
+
+        def sample_proxies(self, _count):
+            return [parse_proxy_url(proxy_line)]
+
+    calls = 0
+
+    async def mixed_quota_failure(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        category = "timeout" if calls == 1 else "bandwidth_exhausted"
+        return {"ok": False, "category": category, "error": category}
+
+    monkeypatch.setattr(config.proxy, "MODE", "file")
+    monkeypatch.setattr(config.proxy, "PROXY_FILE", str(proxy_file))
+    monkeypatch.setattr("src.sanitizer.stealth_browser.get_proxy_pool", lambda: Pool())
+    monkeypatch.setattr(server, "test_proxy_connection", mixed_quota_failure)
+
+    result = await server._test_proxy_pool_sample(1, 3)
+
+    assert result["sampled"] == 1
+    assert result["removed"] == 0
+    assert proxy_file.read_text(encoding="utf-8") == proxy_line + "\n"
+
+
+@pytest.mark.asyncio
+async def test_none_mode_does_not_test_stale_custom_proxy(monkeypatch):
+    async def unexpected_probe(*_args, **_kwargs):
+        raise AssertionError("stale custom proxy should not be tested in none mode")
+
+    monkeypatch.setattr(config.proxy, "MODE", "none")
+    monkeypatch.setattr(config.proxy, "CUSTOM_PROXY", "http://127.0.0.1:8080")
+    monkeypatch.setattr(server, "test_proxy_connection", unexpected_probe)
+
+    response = await server._test_proxy_view(_JsonRequest({"timeout": 3}))
+    payload = json.loads(response.body)
+
+    assert payload["ok"] is False
+    assert "请先输入" in payload["error"]
+
+
+@pytest.mark.asyncio
 async def test_file_mode_reports_mixed_failure_breakdown(monkeypatch):
     class Pool:
         def __len__(self):

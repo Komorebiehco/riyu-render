@@ -1005,6 +1005,7 @@ function init() {
   loadProxySettings();
   refreshAll();
   setInterval(() => refreshAll({ silent: true }), 2000);
+  setInterval(refreshProxyAutoStatus, 30000);
 }
 
 document.addEventListener('DOMContentLoaded', init);
@@ -1030,13 +1031,80 @@ async function loadProxySettings() {
     if ($('#proxyFileInput')) $('#proxyFileInput').value = proxy.proxy_file || 'proxies.txt';
     if ($('#proxyApiUrlInput')) $('#proxyApiUrlInput').value = proxy.proxy_api_url || '';
     if ($('#proxyTimeoutInput')) $('#proxyTimeoutInput').value = proxy.proxy_timeout || 15;
+    if ($('#proxyAutoCheckEnabled')) $('#proxyAutoCheckEnabled').checked = proxy.auto_check_enabled !== false;
+    if ($('#proxyAutoCheckInterval')) {
+      $('#proxyAutoCheckInterval').value = Math.max(1, Math.round((proxy.auto_check_interval_seconds || 900) / 60));
+    }
+    if ($('#proxyAutoCheckSampleCount')) {
+      $('#proxyAutoCheckSampleCount').value = proxy.auto_check_sample_count || 10;
+    }
 
     parseRawProxyToBuilder(proxy.custom_proxy || '');
     updateProxyModePanels(mode);
     updateProxyBadge(mode, data.loaded_count || 0);
     updateProxyFileSummary(data.file, data.loaded_count || 0);
+    updateProxyAutoCheckControls();
+    renderProxyAutoCheckStatus(data.auto_check || {}, proxy, data.loaded_count || 0);
   } catch (err) {
     console.warn('Failed to load proxy settings:', err);
+  }
+}
+
+async function refreshProxyAutoStatus() {
+  try {
+    const data = await apiFetch('/api/settings/proxy');
+    if (!data?.proxy) return;
+    renderProxyAutoCheckStatus(data.auto_check || {}, data.proxy, data.loaded_count || 0);
+  } catch (err) {
+    console.warn('Failed to refresh proxy auto-check status:', err);
+  }
+}
+
+function updateProxyAutoCheckControls() {
+  const enabled = $('#proxyAutoCheckEnabled')?.checked !== false;
+  const group = $('.auto-check-group');
+  const interval = $('#proxyAutoCheckInterval');
+  const sampleCount = $('#proxyAutoCheckSampleCount');
+  if (group) group.classList.toggle('is-disabled', !enabled);
+  if (interval) interval.disabled = !enabled;
+  if (sampleCount) sampleCount.disabled = !enabled;
+}
+
+function renderProxyAutoCheckStatus(autoCheck, proxy, loadedCount = 0) {
+  const status = $('#proxyAutoCheckStatus');
+  const meta = $('#proxyAutoCheckMeta');
+  const pulse = $('#proxyAutoCheckPulse');
+  if (!status || !meta) return;
+
+  const enabled = proxy?.auto_check_enabled !== false;
+  const stateName = autoCheck?.status || (enabled ? 'waiting' : 'disabled');
+  const labels = {
+    initializing: '正在初始化自动巡检',
+    waiting: '自动巡检等待运行',
+    running: '正在自动检测代理',
+    completed: '最近一次自动巡检已完成',
+    empty_pool: '代理池中没有可检测节点',
+    skipped_busy: '本轮因代理池忙而跳过',
+    inactive_mode: '自动巡检当前未运行',
+    disabled: '自动巡检已停用',
+    error: '自动巡检运行异常'
+  };
+  status.textContent = labels[stateName] || '自动巡检状态未知';
+
+  const intervalMinutes = Math.max(1, Math.round((proxy?.auto_check_interval_seconds || autoCheck?.interval_seconds || 900) / 60));
+  const sampleCount = proxy?.auto_check_sample_count || autoCheck?.sample_count || 10;
+  const lastRun = autoCheck?.last_run_at ? new Date(autoCheck.last_run_at) : null;
+  if (lastRun && !Number.isNaN(lastRun.getTime())) {
+    const time = lastRun.toLocaleString('zh-CN', { hour12: false });
+    meta.textContent = `${time} · 抽样 ${autoCheck.sampled || 0} · 可用 ${autoCheck.succeeded || 0} · 删除 ${autoCheck.removed || 0} · 剩余 ${autoCheck.pool_size ?? loadedCount}`;
+  } else if (stateName === 'inactive_mode') {
+    meta.textContent = `切换为代理池文件模式后生效 · 每 ${intervalMinutes} 分钟抽样 ${sampleCount} 个`;
+  } else {
+    meta.textContent = `每 ${intervalMinutes} 分钟抽样 ${sampleCount} 个节点 · 当前 ${loadedCount} 个`;
+  }
+
+  if (pulse) {
+    pulse.className = `pulse${['disabled', 'inactive_mode', 'error', 'empty_pool'].includes(stateName) ? ' offline' : ''}`;
   }
 }
 
@@ -1273,7 +1341,10 @@ async function saveProxySettings() {
     custom_proxy: $('#customProxyInput') ? $('#customProxyInput').value.trim() : '',
     proxy_file: $('#proxyFileInput') ? $('#proxyFileInput').value.trim() : 'proxies.txt',
     proxy_api_url: $('#proxyApiUrlInput') ? $('#proxyApiUrlInput').value.trim() : '',
-    proxy_timeout: $('#proxyTimeoutInput') ? parseInt($('#proxyTimeoutInput').value, 10) || 15 : 15
+    proxy_timeout: $('#proxyTimeoutInput') ? parseInt($('#proxyTimeoutInput').value, 10) || 15 : 15,
+    auto_check_enabled: $('#proxyAutoCheckEnabled')?.checked !== false,
+    auto_check_interval_seconds: Math.min(1440, Math.max(1, parseInt($('#proxyAutoCheckInterval')?.value, 10) || 15)) * 60,
+    auto_check_sample_count: Math.min(50, Math.max(1, parseInt($('#proxyAutoCheckSampleCount')?.value, 10) || 10))
   };
 
   try {
@@ -1288,6 +1359,7 @@ async function saveProxySettings() {
 
     showToast(res.message || '代理配置已更新');
     updateProxyBadge(res.proxy.mode, res.loaded_count || 0);
+    renderProxyAutoCheckStatus(res.auto_check || {}, res.proxy, res.loaded_count || 0);
   } catch (err) {
     showToast(`保存失败: ${err.message}`);
   } finally {
@@ -1317,7 +1389,7 @@ async function testProxySettings() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         proxy_url: mode === 'custom' ? customProxy : undefined,
-        timeout: 8,
+        timeout: Math.min(20, Math.max(2, parseInt($('#proxyTimeoutInput')?.value, 10) || 8)),
         sample_count: mode === 'file' ? 40 : undefined
       })
     });
@@ -1404,6 +1476,9 @@ function initProxyEvents() {
 
   const testBtn = $('#testProxyBtn');
   if (testBtn) testBtn.addEventListener('click', testProxySettings);
+
+  const autoCheckEnabled = $('#proxyAutoCheckEnabled');
+  if (autoCheckEnabled) autoCheckEnabled.addEventListener('change', updateProxyAutoCheckControls);
 
   const fileInput = $('#proxyPoolFileInput');
   const chooseButton = $('#chooseProxyFileBtn');

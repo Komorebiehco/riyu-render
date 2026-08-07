@@ -103,20 +103,32 @@ def test_save_and_load_proxy_settings(tmp_path):
             mode="custom",
             custom_proxy="socks5://127.0.0.1:1080",
             proxy_timeout=20,
+            auto_check_enabled=True,
+            auto_check_interval_seconds=600,
+            auto_check_sample_count=12,
         )
         assert saved["mode"] == "custom"
         assert saved["custom_proxy"] == "socks5://127.0.0.1:1080"
         assert saved["proxy_timeout"] == 20
+        assert saved["auto_check_enabled"] is True
+        assert saved["auto_check_interval_seconds"] == 600
+        assert saved["auto_check_sample_count"] == 12
         assert test_settings_file.is_file()
 
         # Reset config memory state and reload from file
         config.proxy.MODE = "none"
         config.proxy.CUSTOM_PROXY = ""
+        config.proxy.AUTO_CHECK_ENABLED = False
+        config.proxy.AUTO_CHECK_INTERVAL_SECONDS = 60
+        config.proxy.AUTO_CHECK_SAMPLE_COUNT = 1
         load_persistent_settings()
 
         assert config.proxy.MODE == "custom"
         assert config.proxy.CUSTOM_PROXY == "socks5://127.0.0.1:1080"
         assert config.proxy.PROXY_TIMEOUT == 20
+        assert config.proxy.AUTO_CHECK_ENABLED is True
+        assert config.proxy.AUTO_CHECK_INTERVAL_SECONDS == 600
+        assert config.proxy.AUTO_CHECK_SAMPLE_COUNT == 12
 
 def test_parse_four_part_proxy():
     # host:port:user:pass

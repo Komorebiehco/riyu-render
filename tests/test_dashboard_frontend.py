@@ -28,7 +28,14 @@ def test_dashboard_task_actions_and_multi_file_proxy_upload_contract():
 
 def test_dashboard_proxy_test_reports_automatic_pruning():
     source = APP_JS.read_text(encoding="utf-8")
+    html = (APP_JS.parent / "index.html").read_text(encoding="utf-8")
 
     assert "res.removed" in source
     assert "自动移除" in source
     assert "res.pool_size" in source
+    assert "auto_check_enabled" in source
+    assert "auto_check_interval_seconds" in source
+    assert "auto_check_sample_count" in source
+    assert "renderProxyAutoCheckStatus" in source
+    assert "proxyAutoCheckEnabled" in html
+    assert "proxyAutoCheckStatus" in html

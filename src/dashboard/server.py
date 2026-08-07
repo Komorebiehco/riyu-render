@@ -18,6 +18,7 @@ import re
 import time
 import uuid
 from collections import Counter, deque
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -48,6 +49,28 @@ _import_jobs: list[dict[str, Any]] = []
 _import_pending: deque[tuple[dict[str, Any], list[Any]]] = deque()
 _import_worker_task: asyncio.Task[None] | None = None
 _IMPORT_JOB_HISTORY_LIMIT = 50
+_PROXY_OPERATION_LOCK = web.AppKey("proxy_operation_lock", asyncio.Lock)
+_PROXY_AUTO_WAKE = web.AppKey("proxy_auto_wake", asyncio.Event)
+_PROXY_AUTO_STATE = web.AppKey("proxy_auto_state", dict)
+_PROXY_AUTO_TASK = web.AppKey("proxy_auto_task", dict)
+
+
+def _proxy_operation_lock(app: Any) -> asyncio.Lock | None:
+    try:
+        lock = app.get(_PROXY_OPERATION_LOCK)
+    except (AttributeError, TypeError):
+        return None
+    return lock if isinstance(lock, asyncio.Lock) else None
+
+
+@asynccontextmanager
+async def _proxy_operation(app: Any):
+    lock = _proxy_operation_lock(app)
+    if lock is None:
+        yield
+        return
+    async with lock:
+        yield
 
 STEP_FIELDS = (
     ("预检", ("step1_validated",)),
@@ -1162,10 +1185,11 @@ async def test_proxy_connection(
             pass
 
 
-async def _get_proxy_settings(_: web.Request) -> web.Response:
+async def _get_proxy_settings(request: web.Request) -> web.Response:
     from src.sanitizer.stealth_browser import get_proxy_pool
     pool = get_proxy_pool()
     proxy_path = Path(config.proxy.PROXY_FILE)
+    auto_state = _sync_proxy_auto_state(request.app)
     return web.json_response({
         "proxy": config.proxy.to_dict(),
         "loaded_count": len(pool),
@@ -1174,6 +1198,7 @@ async def _get_proxy_settings(_: web.Request) -> web.Response:
             "name": proxy_path.name,
             "size": proxy_path.stat().st_size if proxy_path.is_file() else 0,
         },
+        "auto_check": dict(auto_state),
     })
 
 
@@ -1217,26 +1242,32 @@ async def _upload_proxy_file(request: web.Request) -> web.Response:
         raise web.HTTPBadRequest(text="至少选择一个 .txt 代理池文件")
 
     from src.config import DEFAULT_PROXY_FILE, save_proxy_pool, save_proxy_settings
-    try:
-        existing_content = ""
-        if DEFAULT_PROXY_FILE.is_file():
-            existing_content = DEFAULT_PROXY_FILE.read_text(encoding="utf-8")
-        combined_content = "\n".join(
-            part for part in [existing_content, *(content for _, content, _ in files)] if part
-        )
-        stored = save_proxy_pool(combined_content, DEFAULT_PROXY_FILE)
-        saved = save_proxy_settings(
-            mode="file",
-            custom_proxy=config.proxy.CUSTOM_PROXY,
-            proxy_file=stored["path"],
-            proxy_api_url=config.proxy.PROXY_API_URL,
-            proxy_timeout=config.proxy.PROXY_TIMEOUT,
-        )
-    except ValueError as err:
-        raise web.HTTPBadRequest(text=str(err)) from err
-
     from src.sanitizer.stealth_browser import get_proxy_pool
-    loaded_count = len(get_proxy_pool())
+
+    async with _proxy_operation(getattr(request, "app", None)):
+        try:
+            existing_content = ""
+            if DEFAULT_PROXY_FILE.is_file():
+                existing_content = DEFAULT_PROXY_FILE.read_text(encoding="utf-8")
+            combined_content = "\n".join(
+                part for part in [existing_content, *(content for _, content, _ in files)] if part
+            )
+            stored = save_proxy_pool(combined_content, DEFAULT_PROXY_FILE)
+            saved = save_proxy_settings(
+                mode="file",
+                custom_proxy=config.proxy.CUSTOM_PROXY,
+                proxy_file=stored["path"],
+                proxy_api_url=config.proxy.PROXY_API_URL,
+                proxy_timeout=config.proxy.PROXY_TIMEOUT,
+            )
+        except ValueError as err:
+            raise web.HTTPBadRequest(text=str(err)) from err
+        loaded_count = len(get_proxy_pool())
+
+    app = getattr(request, "app", {})
+    wake = app.get(_PROXY_AUTO_WAKE)
+    if isinstance(wake, asyncio.Event):
+        wake.set()
     return web.json_response({
         "status": "ok",
         "proxy": saved,
@@ -1265,24 +1296,39 @@ async def _save_proxy_settings_view(request: web.Request) -> web.Response:
     proxy_file = str(payload.get("proxy_file", "proxies.txt"))
     proxy_api_url = str(payload.get("proxy_api_url", ""))
     proxy_timeout = int(payload.get("proxy_timeout", 15))
+    auto_check_enabled = payload.get("auto_check_enabled")
+    auto_check_interval_seconds = payload.get("auto_check_interval_seconds")
+    auto_check_sample_count = payload.get("auto_check_sample_count")
 
     from src.config import save_proxy_settings
-    try:
-        saved = save_proxy_settings(
-            mode=mode,
-            custom_proxy=custom_proxy,
-            proxy_file=proxy_file,
-            proxy_api_url=proxy_api_url,
-            proxy_timeout=proxy_timeout,
-        )
-    except ValueError as err:
-        raise web.HTTPBadRequest(text=str(err))
-
     from src.sanitizer.stealth_browser import get_proxy_pool
+
+    async with _proxy_operation(getattr(request, "app", None)):
+        try:
+            saved = save_proxy_settings(
+                mode=mode,
+                custom_proxy=custom_proxy,
+                proxy_file=proxy_file,
+                proxy_api_url=proxy_api_url,
+                proxy_timeout=proxy_timeout,
+                auto_check_enabled=auto_check_enabled,
+                auto_check_interval_seconds=auto_check_interval_seconds,
+                auto_check_sample_count=auto_check_sample_count,
+            )
+        except (TypeError, ValueError) as err:
+            raise web.HTTPBadRequest(text=str(err)) from err
+        loaded_count = len(get_proxy_pool())
+
+    app = getattr(request, "app", {})
+    wake = app.get(_PROXY_AUTO_WAKE)
+    if isinstance(wake, asyncio.Event):
+        wake.set()
+    auto_state = _sync_proxy_auto_state(app) if _PROXY_AUTO_STATE in app else {}
     return web.json_response({
         "status": "ok",
         "proxy": saved,
-        "loaded_count": len(get_proxy_pool()),
+        "loaded_count": loaded_count,
+        "auto_check": dict(auto_state),
         "message": "代理配置保存成功",
     })
 
@@ -1327,6 +1373,124 @@ def _prune_failed_proxy_nodes(raw_urls: set[str]) -> int:
     return removed
 
 
+async def _test_proxy_pool_sample(sample_count: int, timeout: float) -> dict[str, Any]:
+    """Test a bounded file-pool sample and prune conclusively failed nodes."""
+    from src.config import format_proxy_url
+    from src.sanitizer.stealth_browser import get_proxy_pool
+
+    sample_count = min(max(int(sample_count), 1), 50)
+    timeout = min(max(float(timeout), 2.0), 20.0)
+    pool = get_proxy_pool()
+    proxies = pool.sample_proxies(sample_count)
+    if not proxies:
+        return {
+            "ok": False,
+            "mode": "file",
+            "sampled": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "categories": {},
+            "targets_tested": 2,
+            "pool_size": len(pool),
+            "initial_pool_size": len(pool),
+            "removed": 0,
+            "error": "代理池中没有可测试节点",
+            "category": "empty_pool",
+        }
+
+    targets = (
+        ("www.google.com", 443),
+        ("www.cloudflare.com", 443),
+    )
+    target_results = await asyncio.gather(*(
+        test_proxy_connection(
+            format_proxy_url(proxy),
+            target_host=target_host,
+            target_port=target_port,
+            timeout=timeout,
+        )
+        for proxy in proxies
+        for target_host, target_port in targets
+    ))
+    results: list[dict[str, Any]] = []
+    failed_raw_urls: set[str] = set()
+    for index, proxy in enumerate(proxies):
+        checks = target_results[index * len(targets):(index + 1) * len(targets)]
+        successful = next((check for check in checks if check.get("ok")), None)
+        if successful:
+            results.append(successful)
+            continue
+
+        categories_for_node = Counter(
+            str(check.get("category", "unknown")) for check in checks
+        )
+        primary = categories_for_node.most_common(1)[0][0]
+        representative = next(
+            check for check in checks
+            if str(check.get("category", "unknown")) == primary
+        )
+        results.append(representative)
+
+        has_quota_failure = any(
+            str(check.get("category", "unknown")) == "bandwidth_exhausted"
+            for check in checks
+        )
+        if not has_quota_failure:
+            raw_url = str(proxy.get("raw_url", "")).strip()
+            if raw_url:
+                failed_raw_urls.add(raw_url)
+
+    succeeded = [result for result in results if result.get("ok")]
+    categories = Counter(
+        str(result.get("category", "unknown"))
+        for result in results
+        if not result.get("ok")
+    )
+    initial_pool_size = len(pool)
+    removed = _prune_failed_proxy_nodes(failed_raw_urls)
+    response: dict[str, Any] = {
+        "ok": bool(succeeded),
+        "mode": "file",
+        "sampled": len(results),
+        "succeeded": len(succeeded),
+        "failed": len(results) - len(succeeded),
+        "categories": dict(categories),
+        "targets_tested": len(targets),
+        "pool_size": len(pool),
+        "initial_pool_size": initial_pool_size,
+        "removed": removed,
+    }
+    if succeeded:
+        fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))
+        response.update({
+            "latency_ms": fastest.get("latency_ms"),
+            "message": f"代理池抽样通过：{len(succeeded)}/{len(results)} 个节点可用",
+        })
+    elif categories.get("bandwidth_exhausted") == len(results):
+        response.update({
+            "error": "抽样节点全部返回 429：代理套餐流量或带宽额度已耗尽，请在供应商处续费或更换代理池",
+            "category": "bandwidth_exhausted",
+        })
+    else:
+        category_labels = {
+            "bandwidth_exhausted": "额度耗尽",
+            "auth_failed": "认证失败",
+            "timeout": "连接超时",
+            "handshake_failed": "握手失败",
+            "http_rejected": "HTTP 拒绝",
+            "unknown": "未知错误",
+        }
+        breakdown = "、".join(
+            f"{category_labels.get(category, category)} {count} 个"
+            for category, count in categories.most_common()
+        )
+        response.update({
+            "error": f"代理池抽样未发现可用节点：{breakdown}",
+            "category": categories.most_common(1)[0][0] if categories else "unknown",
+        })
+    return response
+
+
 async def _test_proxy_view(request: web.Request) -> web.Response:
     payload = {}
     if request.can_read_body:
@@ -1335,111 +1499,153 @@ async def _test_proxy_view(request: web.Request) -> web.Response:
         except Exception:
             pass
 
-    proxy_url = payload.get("proxy_url") or config.proxy.CUSTOM_PROXY
-    if not proxy_url and config.proxy.MODE == "file":
-        from src.sanitizer.stealth_browser import get_proxy_pool
-        from src.config import format_proxy_url
+    submitted_proxy = str(payload.get("proxy_url") or "").strip()
+    if config.proxy.MODE == "file" and not submitted_proxy:
+        try:
+            sample_count = int(payload.get("sample_count", 40))
+            timeout = float(payload.get("timeout", 8.0))
+        except (TypeError, ValueError) as exc:
+            raise web.HTTPBadRequest(text="代理测试参数无效") from exc
+        async with _proxy_operation(getattr(request, "app", None)):
+            result = await _test_proxy_pool_sample(sample_count, timeout)
+        return web.json_response(result)
 
-        sample_count = min(max(int(payload.get("sample_count", 40)), 1), 50)
-        pool = get_proxy_pool()
-        proxies = pool.sample_proxies(sample_count)
-        if not proxies:
-            return web.json_response({"ok": False, "error": "代理池中没有可测试节点"})
-
-        timeout = min(max(float(payload.get("timeout", 8.0)), 2.0), 20.0)
-        targets = (
-            ("www.google.com", 443),
-            ("www.cloudflare.com", 443),
-        )
-        target_results = await asyncio.gather(*(
-            test_proxy_connection(
-                format_proxy_url(proxy),
-                target_host=target_host,
-                target_port=target_port,
-                timeout=timeout,
-            )
-            for proxy in proxies
-            for target_host, target_port in targets
-        ))
-        results = []
-        failed_raw_urls: set[str] = set()
-        for index in range(len(proxies)):
-            checks = target_results[index * len(targets):(index + 1) * len(targets)]
-            successful = next((check for check in checks if check.get("ok")), None)
-            if successful:
-                results.append(successful)
-                continue
-            categories_for_node = Counter(
-                str(check.get("category", "unknown")) for check in checks
-            )
-            primary = categories_for_node.most_common(1)[0][0]
-            representative = next(
-                check for check in checks
-                if str(check.get("category", "unknown")) == primary
-            )
-            results.append(representative)
-            if primary != "bandwidth_exhausted":
-                raw_url = str(proxies[index].get("raw_url", "")).strip()
-                if raw_url:
-                    failed_raw_urls.add(raw_url)
-        succeeded = [result for result in results if result.get("ok")]
-        categories = Counter(
-            str(result.get("category", "unknown"))
-            for result in results
-            if not result.get("ok")
-        )
-        initial_pool_size = len(pool)
-        removed = _prune_failed_proxy_nodes(failed_raw_urls)
-        response = {
-            "ok": bool(succeeded),
-            "mode": "file",
-            "sampled": len(results),
-            "succeeded": len(succeeded),
-            "failed": len(results) - len(succeeded),
-            "categories": dict(categories),
-            "targets_tested": len(targets),
-            "pool_size": len(pool),
-            "initial_pool_size": initial_pool_size,
-            "removed": removed,
-        }
-        if succeeded:
-            fastest = min(succeeded, key=lambda item: float(item.get("latency_ms", 999999)))
-            response.update({
-                "latency_ms": fastest.get("latency_ms"),
-                "message": f"代理池抽样通过：{len(succeeded)}/{len(results)} 个节点可用",
-            })
-        elif categories.get("bandwidth_exhausted") == len(results):
-            response.update({
-                "error": "抽样节点全部返回 429：代理套餐流量或带宽额度已耗尽，请在供应商处续费或更换代理池",
-                "category": "bandwidth_exhausted",
-            })
-        else:
-            category_labels = {
-                "bandwidth_exhausted": "额度耗尽",
-                "auth_failed": "认证失败",
-                "timeout": "连接超时",
-                "handshake_failed": "握手失败",
-                "http_rejected": "HTTP 拒绝",
-                "unknown": "未知错误",
-            }
-            breakdown = "、".join(
-                f"{category_labels.get(category, category)} {count} 个"
-                for category, count in categories.most_common()
-            )
-            response.update({
-                "error": f"代理池抽样未发现可用节点：{breakdown}",
-                "category": categories.most_common(1)[0][0] if categories else "unknown",
-            })
-        return web.json_response(response)
-
+    proxy_url = submitted_proxy
+    if not proxy_url and config.proxy.MODE == "custom":
+        proxy_url = config.proxy.CUSTOM_PROXY
     if not proxy_url:
         return web.json_response({"ok": False, "error": "请先输入或选择要测试的代理地址"})
 
-    result = await test_proxy_connection(
-        proxy_url=proxy_url,
-        timeout=float(payload.get("timeout", 5.0)),
-    )
+    try:
+        timeout = float(payload.get("timeout", 5.0))
+    except (TypeError, ValueError) as exc:
+        raise web.HTTPBadRequest(text="代理测试参数无效") from exc
+    result = await test_proxy_connection(proxy_url=proxy_url, timeout=timeout)
     return web.json_response(result)
+
+
+def _sync_proxy_auto_state(app: web.Application) -> dict[str, Any]:
+    state = app[_PROXY_AUTO_STATE]
+    state.update({
+        "enabled": bool(config.proxy.AUTO_CHECK_ENABLED),
+        "mode": config.proxy.MODE,
+        "interval_seconds": int(config.proxy.AUTO_CHECK_INTERVAL_SECONDS),
+        "sample_count": int(config.proxy.AUTO_CHECK_SAMPLE_COUNT),
+    })
+    if not state.get("running"):
+        if not state["enabled"]:
+            state["status"] = "disabled"
+        elif state["mode"] != "file":
+            state["status"] = "inactive_mode"
+        elif state.get("status") in {"initializing", "disabled", "inactive_mode"}:
+            state["status"] = "waiting"
+    return state
+
+
+async def _run_proxy_auto_check_once(app: web.Application) -> dict[str, Any] | None:
+    state = _sync_proxy_auto_state(app)
+    if not config.proxy.AUTO_CHECK_ENABLED or config.proxy.MODE != "file":
+        return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    lock = _proxy_operation_lock(app)
+    if lock is not None and lock.locked():
+        state.update({
+            "running": False,
+            "status": "skipped_busy",
+            "last_attempt_at": now,
+        })
+        log.info("自动代理巡检跳过：代理池正在执行其他操作")
+        return None
+
+    state.update({
+        "running": True,
+        "status": "running",
+        "last_attempt_at": now,
+    })
+    try:
+        async with _proxy_operation(app):
+            result = await _test_proxy_pool_sample(
+                config.proxy.AUTO_CHECK_SAMPLE_COUNT,
+                config.proxy.PROXY_TIMEOUT,
+            )
+    except asyncio.CancelledError:
+        state["running"] = False
+        raise
+    except Exception as exc:
+        state.update({
+            "running": False,
+            "status": "error",
+            "last_run_at": datetime.now(timezone.utc).isoformat(),
+            "error_type": type(exc).__name__,
+        })
+        log.warning("自动代理巡检失败: %s", type(exc).__name__)
+        return None
+
+    state.update({
+        "running": False,
+        "status": "completed" if result.get("sampled") else "empty_pool",
+        "last_run_at": datetime.now(timezone.utc).isoformat(),
+        "sampled": int(result.get("sampled", 0)),
+        "succeeded": int(result.get("succeeded", 0)),
+        "failed": int(result.get("failed", 0)),
+        "removed": int(result.get("removed", 0)),
+        "pool_size": int(result.get("pool_size", 0)),
+        "categories": dict(result.get("categories", {})),
+    })
+    state.pop("error_type", None)
+    log.info(
+        "自动代理巡检完成: sampled=%d succeeded=%d failed=%d removed=%d pool_size=%d categories=%s",
+        state["sampled"],
+        state["succeeded"],
+        state["failed"],
+        state["removed"],
+        state["pool_size"],
+        state["categories"],
+    )
+    return result
+
+
+async def _proxy_auto_check_loop(app: web.Application) -> None:
+    wake = app[_PROXY_AUTO_WAKE]
+    state = app[_PROXY_AUTO_STATE]
+    while True:
+        _sync_proxy_auto_state(app)
+        if not config.proxy.AUTO_CHECK_ENABLED:
+            state.update({"running": False, "status": "disabled"})
+            await wake.wait()
+            wake.clear()
+            continue
+        if config.proxy.MODE != "file":
+            state.update({"running": False, "status": "inactive_mode"})
+            await wake.wait()
+            wake.clear()
+            continue
+        if state.get("status") in {"initializing", "disabled", "inactive_mode"}:
+            state["status"] = "waiting"
+
+        try:
+            await asyncio.wait_for(
+                wake.wait(),
+                timeout=float(config.proxy.AUTO_CHECK_INTERVAL_SECONDS),
+            )
+        except asyncio.TimeoutError:
+            await _run_proxy_auto_check_once(app)
+        else:
+            wake.clear()
+
+
+async def _proxy_auto_check_context(app: web.Application):
+    holder = app[_PROXY_AUTO_TASK]
+    task = asyncio.create_task(_proxy_auto_check_loop(app), name="proxy-auto-check")
+    holder["task"] = task
+    try:
+        yield
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+        holder["task"] = None
 
 
 async def _health(_: web.Request) -> web.Response:
@@ -1492,6 +1698,26 @@ async def create_app() -> web.Application:
         client_max_size=25 * 1024 * 1024,
         middlewares=[_session_auth],
     )
+    app[_PROXY_OPERATION_LOCK] = asyncio.Lock()
+    app[_PROXY_AUTO_WAKE] = asyncio.Event()
+    app[_PROXY_AUTO_STATE] = {
+        "enabled": bool(config.proxy.AUTO_CHECK_ENABLED),
+        "mode": config.proxy.MODE,
+        "interval_seconds": int(config.proxy.AUTO_CHECK_INTERVAL_SECONDS),
+        "sample_count": int(config.proxy.AUTO_CHECK_SAMPLE_COUNT),
+        "running": False,
+        "status": "initializing",
+        "last_attempt_at": None,
+        "last_run_at": None,
+        "sampled": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "removed": 0,
+        "pool_size": 0,
+        "categories": {},
+    }
+    app[_PROXY_AUTO_TASK] = {"task": None}
+    app.cleanup_ctx.append(_proxy_auto_check_context)
     app.router.add_get("/api/health", _health)
     app.router.add_get("/login", _login_page)
     app.router.add_post("/login", _login)

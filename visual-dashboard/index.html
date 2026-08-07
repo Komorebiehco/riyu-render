@@ -6,7 +6,7 @@
   <meta name="description" content="Kate Mu 森林主题账号安全处理工作台">
   <title>Kate Mu · 森林安全工作台</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="styles.css?v=20260806-4">
+  <link rel="stylesheet" href="styles.css?v=20260808-1">
 </head>
 <body>
   <div class="app-shell">
@@ -414,6 +414,34 @@
               </div>
             </div>
 
+            <div class="settings-group auto-check-group">
+              <div class="auto-check-heading">
+                <label class="group-title" for="proxyAutoCheckEnabled">自动巡检</label>
+                <label class="toggle-control" title="启用自动代理巡检">
+                  <input type="checkbox" id="proxyAutoCheckEnabled" checked>
+                  <span class="toggle-track" aria-hidden="true"></span>
+                  <span>启用</span>
+                </label>
+              </div>
+              <div class="auto-check-layout">
+                <div class="form-field">
+                  <label for="proxyAutoCheckInterval">间隔 (分钟)</label>
+                  <input type="number" id="proxyAutoCheckInterval" value="15" min="1" max="1440">
+                </div>
+                <div class="form-field">
+                  <label for="proxyAutoCheckSampleCount">每轮抽样</label>
+                  <input type="number" id="proxyAutoCheckSampleCount" value="10" min="1" max="50">
+                </div>
+                <div class="auto-check-status" aria-live="polite">
+                  <span class="pulse" id="proxyAutoCheckPulse"></span>
+                  <div>
+                    <strong id="proxyAutoCheckStatus">等待状态同步</strong>
+                    <small id="proxyAutoCheckMeta">每 15 分钟抽样 10 个节点</small>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="test-result-box" id="testResultBox" style="display: none;"></div>
 
             <div class="settings-actions">
@@ -448,6 +476,6 @@
   </div>
 
   <div class="toast" id="toast"><span>✓</span><p>数据已刷新</p></div>
-  <script src="app.js?v=20260806-4"></script>
+  <script src="app.js?v=20260808-1"></script>
 </body>
 </html>
